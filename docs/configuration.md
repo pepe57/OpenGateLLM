@@ -6,6 +6,7 @@ Refer to the [configuration example file](../../../config.example.yml) for an ex
 | --- | --- | --- | --- | --- | --- | --- |
 | dependencies | object | Dependencies used by the API. For details of configuration, see the [Dependencies section](#dependencies). |  |  |  |  |
 | models | array | Models used by the API. At least one model must be defined. For details of configuration, see the [Model section](#model). |  |  |  |  |
+| playground | object | Playground configuration used temporarily in next release to migrate user authentication. For details of configuration, see the [Playground section](#playground). |  |  |  |  |
 | settings | object | Settings used by the API. For details of configuration, see the [Settings section](#settings). |  |  |  |  |
 
 <br>
@@ -15,9 +16,9 @@ Refer to the [configuration example file](../../../config.example.yml) for an ex
 | --- | --- | --- | --- | --- | --- | --- |
 | auth_master_key | string | Master key for the API. It should be a random string with at least 32 characters. This key has all permissions and cannot be modified or deleted. This key is used to create the first role and the first user. This key is also used to encrypt user tokens, watch out if you modify the master key, you'll need to update all user API keys. | False | changeme |  |  |
 | auth_max_token_expiration_days | integer | Maximum number of days for a token to be valid. |  | None |  |  |
-| disabled_routers | array | Disabled routers to limits services of the API. |  |  | • admin<br/>• agents<br/>• audio<br/>• auth<br/>• chat<br/>• chunks<br/>• collections<br/>• completions<br/>• ... | ['agents', 'embeddings'] |
+| disabled_routers | array | Disabled routers to limits services of the API. |  |  | • admin.organizations<br/>• admin.roles<br/>• admin.tokens<br/>• admin.users<br/>• agents<br/>• audio<br/>• auth<br/>• chat<br/>• ... | ['agents', 'embeddings'] |
 | front_url | string | Front-end URL for the application. |  | http://localhost:8501 |  |  |
-| hidden_routers | array | Routers are enabled but hidden in the swagger and the documentation of the API. |  |  | • admin<br/>• agents<br/>• audio<br/>• auth<br/>• chat<br/>• chunks<br/>• collections<br/>• completions<br/>• ... | ['admin'] |
+| hidden_routers | array | Routers are enabled but hidden in the swagger and the documentation of the API. |  |  | • admin.organizations<br/>• admin.roles<br/>• admin.tokens<br/>• admin.users<br/>• agents<br/>• audio<br/>• auth<br/>• chat<br/>• ... | ['admin'] |
 | log_format | string | Logging format of the API. | False | [%(asctime)s][%(process)d:%(name)s][%(levelname)s] %(client_ip)s - %(message)s |  |  |
 | log_level | string | Logging level of the API. | False | INFO | • DEBUG<br/>• INFO<br/>• WARNING<br/>• ERROR<br/>• CRITICAL |  |
 | mcp_max_iterations | integer | Maximum number of iterations for MCP agents in `/v1/agents/completions` endpoint. |  | 2 |  |  |
@@ -44,6 +45,13 @@ Refer to the [configuration example file](../../../config.example.yml) for an ex
 | swagger_version | string | Display version of your API in swagger UI, see https://fastapi.tiangolo.com/tutorial/metadata for more information. |  | latest |  | 2.5.0 |
 | usage_tokenizer | string | Tokenizer used to compute usage of the API. | False | tiktoken_gpt2 | • tiktoken_gpt2<br/>• tiktoken_r50k_base<br/>• tiktoken_p50k_base<br/>• tiktoken_p50k_edit<br/>• tiktoken_cl100k_base<br/>• tiktoken_o200k_base |  |
 | vector_store_model | string | Model used to vectorize the text in the vector store database. Is required if a vector store dependency is provided (Elasticsearch or Qdrant). This model must be defined in the `models` section and have type `text-embeddings-inference`. | False | None |  |  |
+
+<br>
+
+## Playground
+| Attribute | Type | Description | Required | Default | Values | Examples |
+| --- | --- | --- | --- | --- | --- | --- |
+| postgres | object |  |  | {} |  |  |
 
 <br>
 
@@ -127,13 +135,13 @@ See https://github.com/SecretiveShell/MCP-Bridge for more information.
 ### ProConnect
 | Attribute | Type | Description | Required | Default | Values | Examples |
 | --- | --- | --- | --- | --- | --- | --- |
-| allowed_domains | string | List of allowed domains for OAuth2 login. This is used to restrict the domains that can use the OAuth2 login flow. |  | localhost,gouv.fr |  |  |
-| client_id | string | Client ID for the ProConnect application. |  |  |  |  |
-| client_secret | string | Client secret for the ProConnect application. |  |  |  |  |
-| default_role | string | Default role assigned to users when they log in for the first time. |  | Freemium |  |  |
-| redirect_uri | string | Redirect URI for the ProConnect application. |  | https://albert.api.etalab.gouv.fr/v1/oauth2/callback |  |  |
-| scope | string | Scope for the ProConnect application. |  | openid email given_name usual_name siret organizational_unit belonging_population chorusdt |  |  |
-| server_metadata_url | string | OpenID Connect discovery endpoint for server metadata. |  | https://identite-sandbox.proconnect.gouv.fr/.well-known/openid-configuration |  |  |
+| allowed_domains | string | Comma-separated list of domains allowed to sign in via ProConnect (e.g. 'gouv.fr,example.com'). Only fronted on the specified domains will be allowed to authenticate using proconnect. |  | localhost,gouv.fr |  |  |
+| client_id | string | Client identifier provided by ProConnect when you register your application in their dashboard. This value is public (it's fine to embed in clients) but must match the value configured in ProConnect. |  |  |  |  |
+| client_secret | string | Client secret provided by ProConnect at application registration. This value must be kept confidential — it's used by the server to authenticate with ProConnect during token exchange (do not expose it to browsers or mobile apps). |  |  |  |  |
+| default_role | string | Role automatically assigned to users created via ProConnect login on first sign-in. Set this to the role name you want new ProConnect users to receive (must exist in your roles configuration). |  | Freemium |  |  |
+| redirect_uri | string | Redirect URI where users are sent after successful ProConnect authentication. This URI must exactly match one of the redirect URIs configured in OpenGateLLM settings. It must be an HTTPS endpoint in production and is used to receive the authorization tokens from ProConnect. |  | https://albert.api.etalab.gouv.fr/v1/oauth2/callback |  |  |
+| scope | string | Space-separated OAuth2/OpenID Connect scopes requested from ProConnect (for example: 'openid email given_name'). Scopes determine the information returned about the authenticated user; reduce scopes to the minimum necessary for privacy. |  | openid email given_name usual_name siret organizational_unit belonging_population chorusdt |  |  |
+| server_metadata_url | string | OpenID Connect discovery endpoint for ProConnect (server metadata). The SDK/flow uses this to discover authorization, token, and JWKS endpoints. Change to the production discovery URL when switching from sandbox to production. |  | https://identite-sandbox.proconnect.gouv.fr/.well-known/openid-configuration |  |  |
 
 <br>
 

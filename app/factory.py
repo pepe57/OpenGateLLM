@@ -1,4 +1,6 @@
 import logging
+import pkgutil
+from importlib import import_module
 
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.dependencies.utils import get_dependant
@@ -13,13 +15,10 @@ from app.sql.session import set_get_db_func
 from app.utils.context import generate_request_id, request_context
 from app.utils.hooks_decorator import hooks
 from app.utils.variables import (
-    ROUTER__ADMIN,
     ROUTER__COMPLETIONS,
     ROUTER__FILES,
     ROUTER__MONITORING,
-    ROUTER__OAUTH2,
     ROUTER__OCR,
-    ROUTERS,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,33 +50,6 @@ def create_app(db_func=None, *args, **kwargs) -> FastAPI:
     )
     app.add_middleware(SessionMiddleware, secret_key=configuration.settings.session_secret_key)
 
-    # Set up database dependency
-    # If no db_func provided, the depends module will fall back to default
-    from app.endpoints import (
-        agents,  # noqa: F401
-        audio,  # noqa: F401
-        auth,  # noqa: F401
-        chat,  # noqa: F401
-        chunks,  # noqa: F401
-        collections,  # noqa: F401
-        completions,  # noqa: F401
-        deepsearch,  # noqa: F401
-        documents,  # noqa: F401
-        embeddings,  # noqa: F401
-        files,  # noqa: F401
-        models,  # noqa: F401
-        ocr,  # noqa: F401
-        parse,  # noqa: F401
-        proconnect,
-        rerank,  # noqa: F401
-        search,  # noqa: F401
-        tokens,  # noqa: F401
-        usage,  # noqa: F401
-    )
-    from app.endpoints.admin import roles as admin_roles
-    from app.endpoints.admin import tokens as admin_tokens
-    from app.endpoints.admin import users as admin_users
-    from app.endpoints.admin import organizations as admin_organizations
     from app.helpers._accesscontroller import AccessController
 
     def add_hooks(router: APIRouter) -> None:
@@ -100,49 +72,79 @@ def create_app(db_func=None, *args, **kwargs) -> FastAPI:
 
         return await call_next(request)
 
-    # Routers
-    for router in ROUTERS:
-        prefix = "/v1"
+    # Routers: dynamic discovery of modules under app.endpoints
+    prefix = "/v1"
 
-        include_in_schema = router not in configuration.settings.hidden_routers
-        if router in configuration.settings.disabled_routers:
-            include_in_schema = False
+    def iter_endpoint_modules():
+        """Yield (key, module) for each importable module/package under app.endpoints that defines a router."""
+        base_pkg_name = "app.endpoints"
+        try:
+            base_pkg = import_module(base_pkg_name)
+            for finder, name, ispkg in pkgutil.walk_packages(base_pkg.__path__, base_pkg.__name__ + "."):
+                # Skip private modules
+                short = name[len(base_pkg_name) + 1 :]
+                if not short or short.split(".")[-1].startswith("_"):
+                    continue
 
-        router_name = router.upper() if router == ROUTER__OCR else router.title()
+                # Respect disabled routers by key match (e.g., "auth", "proconnect", "admin.organizations")
+                key = short
+                # Only include modules that are not disabled entirely by their top-level key
+                top_key = key.split(".")[0]
+                if top_key in configuration.settings.disabled_routers or key in configuration.settings.disabled_routers:
+                    continue
 
-        if router == ROUTER__ADMIN:
-            add_hooks(router=admin_organizations.router)
-            app.include_router(router=admin_organizations.router, tags=[router_name], prefix=prefix, include_in_schema=include_in_schema)
+                try:
+                    mod = import_module(name)
+                except Exception as e:
+                    logger.exception("Failed to import endpoint module %s: %s", name, e)
+                    continue
 
-            add_hooks(router=admin_roles.router)
-            app.include_router(router=admin_roles.router, tags=[router_name], prefix=prefix, include_in_schema=include_in_schema)
+                if hasattr(mod, "router"):
+                    yield key, mod
+        except Exception as e:
+            logger.exception("Failed to iterate endpoint modules: %s", e)
 
-            add_hooks(router=admin_tokens.router)
-            app.include_router(router=admin_tokens.router, tags=[router_name], prefix=prefix, include_in_schema=include_in_schema)
-
-            add_hooks(router=admin_users.router)
-            app.include_router(router=admin_users.router, tags=[router_name], prefix=prefix, include_in_schema=include_in_schema)
-
-        elif router == ROUTER__MONITORING:
+    for key, mod in iter_endpoint_modules():
+        # Special-case monitoring remains as-is
+        if key == ROUTER__MONITORING:
+            include_in_schema = key not in configuration.settings.hidden_routers
             if configuration.settings.monitoring_prometheus_enabled:
                 app.instrumentator = Instrumentator().instrument(app=app)
-                app.instrumentator.expose(app=app, should_gzip=True, tags=[router_name], dependencies=[Depends(dependency=AccessController(permissions=[PermissionType.READ_METRIC]))], include_in_schema=include_in_schema)  # fmt: off
+                app.instrumentator.expose(app=app, should_gzip=True, tags=["Monitoring"], dependencies=[Depends(dependency=AccessController(permissions=[PermissionType.READ_METRIC]))], include_in_schema=include_in_schema)  # fmt: off
 
-            @app.get(path="/health", tags=[router_name], include_in_schema=include_in_schema)
+            @app.get(path="/health", tags=["Monitoring"], include_in_schema=include_in_schema)
             def health() -> Response:
                 return Response(status_code=200)
 
-        elif router in [ROUTER__COMPLETIONS, ROUTER__FILES]:  # legacy routers
-            include_in_schema = False
+            continue
+
+        try:
+            router_instance = getattr(mod, "router")
+        except Exception as e:
+            logger.exception("Module %s has no router or failed to access it: %s", key, e)
+            continue
+
+        # Decide router tag and include_in_schema
+        router_name = getattr(mod, "ROUTER_NAME", None)
+        if not router_name:
+            # Use OCR upper-case name for the ocr module
+            router_name = key.upper() if key == ROUTER__OCR else key.split(".")[-1].title()
+
+        include_in_schema = key not in configuration.settings.hidden_routers and key.split(".")[0] not in configuration.settings.hidden_routers
+
+        # Legacy: disable usage hooks and hide docs for legacy routers
+        log_usage = True
+        if key in [ROUTER__COMPLETIONS, ROUTER__FILES] or key.split(".")[0] in [ROUTER__COMPLETIONS, ROUTER__FILES]:
             router_name = "Legacy"
-            app.include_router(router=locals()[router].router, tags=[router_name], prefix=prefix, include_in_schema=include_in_schema)
+            include_in_schema = False
+            log_usage = False
 
-        elif router == ROUTER__OAUTH2:
-            add_hooks(router=proconnect.router)
-            app.include_router(router=proconnect.router, tags=[router_name], prefix=prefix, include_in_schema=include_in_schema)
+        if log_usage:
+            add_hooks(router=router_instance)
 
-        else:
-            add_hooks(router=locals()[router].router)
-            app.include_router(router=locals()[router].router, tags=[router_name], prefix=prefix, include_in_schema=include_in_schema)
+        try:
+            app.include_router(router=router_instance, tags=[router_name], prefix=prefix, include_in_schema=include_in_schema)
+        except Exception as e:
+            logger.exception("Failed to include router for %s: %s", key, e)
 
     return app

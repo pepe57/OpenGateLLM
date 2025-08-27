@@ -6,7 +6,6 @@ import streamlit as st
 from streamlit_extras.stylable_container import stylable_container
 
 from ui.backend.login import call_oauth2_logout, decrypt_oauth_token, login, oauth_login
-from ui.backend.sql.session import get_session
 from ui.configuration import configuration  # Ensure configuration is imported
 
 from .proconnect import css_proconnect, html_proconnect
@@ -16,16 +15,17 @@ logger = logging.getLogger(__name__)
 
 def header():
     def authenticate():
-        session = next(get_session())
-
         @st.dialog(title="Login")
         def login_form():
             with st.form(key="login"):  # ProConnect login
                 if configuration.playground.proconnect_enabled:
                     with stylable_container(key="ProConnect", css_styles=css_proconnect):
-                        parsed_home_url = urlparse(configuration.playground.home_url)
-                        api_base_url = f"{parsed_home_url.scheme}://{parsed_home_url.netloc}"
-                        proconnect_login_url = f"{api_base_url}/v1/oauth2/login"
+                        if not configuration.playground.home_url.startswith("https"):  # if no https you must be working locally
+                            proconnect_login_url = f"{configuration.playground.api_url}/v1/auth/proconnect"
+                        else:  # else we are working in production and must use the proper API URL from the home_url
+                            parsed_home_url = urlparse(configuration.playground.home_url)
+                            api_base_url = f"{parsed_home_url.scheme}://{parsed_home_url.netloc}"
+                            proconnect_login_url = f"{api_base_url}/v1/auth/proconnect"
                         st.markdown(
                             html_proconnect.format(
                                 proconnect_login_url=proconnect_login_url,
@@ -42,7 +42,7 @@ def header():
 
                 submit = st.form_submit_button(label="Submit")
                 if submit:
-                    login(user_name, user_password, session)
+                    login(user_name, user_password)
 
         # Access the encrypted token parameter
         encrypted_token = st.query_params.get("encrypted_token", None)
@@ -54,7 +54,7 @@ def header():
                 api_key = decrypted_data.get("app_token")
                 api_key_id = decrypted_data.get("token_id")
                 proconnect_token = decrypted_data.get("proconnect_token")
-                oauth_login(session, api_key, api_key_id, proconnect_token)
+                oauth_login(api_key, api_key_id, proconnect_token)
 
         if st.session_state.get("login_status") is None:
             login_form()

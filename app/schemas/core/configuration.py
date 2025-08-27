@@ -12,7 +12,16 @@ from pydantic_settings import BaseSettings
 import yaml
 
 from app.schemas.models import ModelType
-from app.utils.variables import DEFAULT_APP_NAME, DEFAULT_TIMEOUT, ROUTER__ADMIN, ROUTER__AUTH, ROUTERS
+from app.utils.variables import (
+    DEFAULT_APP_NAME,
+    DEFAULT_TIMEOUT,
+    ROUTER__ADMIN_ORGANIZATIONS,
+    ROUTER__ADMIN_ROLES,
+    ROUTER__ADMIN_TOKENS,
+    ROUTER__ADMIN_USERS,
+    ROUTER__AUTH,
+    ROUTERS,
+)
 
 # utils ----------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -292,13 +301,13 @@ class RedisDependency(ConfigBaseModel):
 
 
 class ProConnect(ConfigBaseModel):
-    client_id: str = Field(default="", description="Client ID for the ProConnect application.")  # fmt: off
-    client_secret: str = Field(default="", description="Client secret for the ProConnect application.")  # fmt: off
-    server_metadata_url: str = Field(default="https://identite-sandbox.proconnect.gouv.fr/.well-known/openid-configuration", description="OpenID Connect discovery endpoint for server metadata.")  # fmt: off
-    redirect_uri: str = Field(default="https://albert.api.etalab.gouv.fr/v1/oauth2/callback", description="Redirect URI for the ProConnect application.")  # fmt: off
-    scope: str = Field(default="openid email given_name usual_name siret organizational_unit belonging_population chorusdt", description="Scope for the ProConnect application.")  # fmt: off
-    allowed_domains: str = Field(default="localhost,gouv.fr", description="List of allowed domains for OAuth2 login. This is used to restrict the domains that can use the OAuth2 login flow.")  # fmt: off
-    default_role: str = Field(default="Freemium", description="Default role assigned to users when they log in for the first time.")  # fmt: off
+    client_id: str = Field(default="", description="Client identifier provided by ProConnect when you register your application in their dashboard. This value is public (it's fine to embed in clients) but must match the value configured in ProConnect.")  # fmt: off
+    client_secret: str = Field(default="", description="Client secret provided by ProConnect at application registration. This value must be kept confidential — it's used by the server to authenticate with ProConnect during token exchange (do not expose it to browsers or mobile apps).")  # fmt: off
+    server_metadata_url: str = Field(default="https://identite-sandbox.proconnect.gouv.fr/.well-known/openid-configuration", description="OpenID Connect discovery endpoint for ProConnect (server metadata). The SDK/flow uses this to discover authorization, token, and JWKS endpoints. Change to the production discovery URL when switching from sandbox to production.")  # fmt: off
+    redirect_uri: str = Field(default="https://albert.api.etalab.gouv.fr/v1/oauth2/callback", description="Redirect URI where users are sent after successful ProConnect authentication. This URI must exactly match one of the redirect URIs configured in OpenGateLLM settings. It must be an HTTPS endpoint in production and is used to receive the authorization tokens from ProConnect.")  # fmt: off
+    scope: str = Field(default="openid email given_name usual_name siret organizational_unit belonging_population chorusdt", description="Space-separated OAuth2/OpenID Connect scopes requested from ProConnect (for example: 'openid email given_name'). Scopes determine the information returned about the authenticated user; reduce scopes to the minimum necessary for privacy.")  # fmt: off
+    allowed_domains: str = Field(default="localhost,gouv.fr", description="Comma-separated list of domains allowed to sign in via ProConnect (e.g. 'gouv.fr,example.com'). Only fronted on the specified domains will be allowed to authenticate using proconnect.")  # fmt: off
+    default_role: str = Field(default="Freemium", description="Role automatically assigned to users created via ProConnect login on first sign-in. Set this to the role name you want new ProConnect users to receive (must exist in your roles configuration).")  # fmt: off
 
 
 @custom_validation_error(url="https://github.com/etalab-ia/albert-api/blob/main/docs/configuration.md#dependencies")
@@ -443,7 +452,10 @@ class Settings(ConfigBaseModel):
         if len(values.auth_master_key) < 32:
             logging.warning("Auth master key is too short for production, it should be at least 32 characters.")  # fmt: off
 
-        if ROUTER__ADMIN not in values.hidden_routers:
+        if any(
+            router in values.hidden_routers
+            for router in [ROUTER__ADMIN_ORGANIZATIONS, ROUTER__ADMIN_ROLES, ROUTER__ADMIN_TOKENS, ROUTER__ADMIN_USERS]
+        ):
             logging.warning("Admin router should be hidden in production.")  # fmt: off
 
         if ROUTER__AUTH not in values.hidden_routers:
@@ -455,6 +467,10 @@ class Settings(ConfigBaseModel):
 # load config ----------------------------------------------------------------------------------------------------------------------------------------
 
 
+class Playground(ConfigBaseModel):
+    postgres: dict = {}
+
+
 @custom_validation_error(url="https://github.com/etalab-ia/opengatellm/blob/main/docs/configuration.md#all-configuration")
 class ConfigFile(ConfigBaseModel):
     """
@@ -464,6 +480,9 @@ class ConfigFile(ConfigBaseModel):
     models: List[Model] = Field(min_length=1, description="Models used by the API. At least one model must be defined.")  # fmt: off
     dependencies: Dependencies = Field(default_factory=Dependencies, description="Dependencies used by the API.")  # fmt: off
     settings: Settings = Field(default_factory=Settings, description="Settings used by the API.")  # fmt: off
+    playground: Playground = Field(
+        default_factory=Playground, description="Playground configuration used temporarily in next release to migrate user authentication."
+    )
 
     @field_validator("settings", mode="before")
     def set_default_settings(cls, settings) -> Any:
@@ -549,6 +568,7 @@ class Configuration(BaseSettings):
         values.models = config.models
         values.dependencies = config.dependencies
         values.settings = config.settings
+        values.playground = config.playground
 
         return values
 
