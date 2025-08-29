@@ -14,7 +14,10 @@ def get_models(
         url=f"{configuration.playground.api_url}/v1/models", headers={"Authorization": f"Bearer {st.session_state["user"].api_key}"}
     )
     if response.status_code != 200:
-        st.error(response.json()["detail"])
+        try:
+            st.error(response.json()["detail"])
+        except requests.JSONDecodeError:
+            st.error(response.text)
         return []
 
     models = response.json()["data"]

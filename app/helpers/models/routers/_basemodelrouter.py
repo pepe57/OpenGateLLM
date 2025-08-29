@@ -40,8 +40,8 @@ class BaseModelRouter(ABC):
         max_context_length = min(max_context_lengths) if max_context_lengths else None
 
         # if there are several models with different costs, it will return the max value for consistency of /v1/models response
-        prompt_tokens = max(costs_prompt_tokens)
-        completion_tokens = max(costs_completion_tokens)
+        prompt_tokens = max(costs_prompt_tokens) if costs_prompt_tokens else 0.0
+        completion_tokens = max(costs_completion_tokens) if costs_completion_tokens else 0.0
 
         # set attributes of the model (returned by /v1/models endpoint)
         self.name = name
@@ -53,7 +53,7 @@ class BaseModelRouter(ABC):
         self.cost_prompt_tokens = prompt_tokens
         self.cost_completion_tokens = completion_tokens
 
-        self._vector_size = vector_sizes[0]
+        self._vector_size = vector_sizes[0] if vector_sizes else None
         self._routing_strategy = routing_strategy
         self._cycle = cycle(providers)
         self._providers = providers
