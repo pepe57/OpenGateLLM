@@ -743,8 +743,7 @@ class IdentityAccessManager:
         result = await session.execute(statement=select(UserTable.password).where(UserTable.id == user.id))
         user_password = result.scalar_one()
 
-        is_password_correct = self._check_password(password=password, hashed_password=user_password)
-        if not is_password_correct:
+        if not self._check_password(password=password, hashed_password=user_password):
             raise InvalidCurrentPasswordException()
 
         token_id, token = await self.refresh_token(session, user_id=user.id, name=self.PLAYGROUND_KEY_NAME, duration=self.playground_session_duration)
