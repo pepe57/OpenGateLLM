@@ -3,8 +3,10 @@ import os
 
 from api.schemas.core.configuration import ConfigFile
 
+BASE_DIR = os.path.dirname(__file__)
 parser = argparse.ArgumentParser()
-parser.add_argument("--output", type=str, default="docs-legacy/configuration.md")
+parser.add_argument("--output", type=str, default=os.path.join(BASE_DIR, "../docs/docs/getting-started/configuration.md"))
+parser.add_argument("--header", type=str, default=os.path.join(BASE_DIR, "../scripts/configuration_header.md"))
 
 
 def get_documentation_data(title: str, data: list, properties: dict, defs: dict, header: str = "", level: int = 1):
@@ -15,8 +17,8 @@ def get_documentation_data(title: str, data: list, properties: dict, defs: dict,
 
         description = properties[property].get("description", "")
         required = properties[property].get("required", "")
-        default = properties[property].get("default", "")
-        examples = properties[property].get("examples", [""])[0]
+        default = convert_field_to_string_if_dict(properties[property].get("default", ""))
+        examples = convert_field_to_string_if_dict(properties[property].get("examples", [""])[0])
 
         if "anyOf" in properties[property]:
             properties[property].update(properties[property]["anyOf"][0])
@@ -37,7 +39,7 @@ def get_documentation_data(title: str, data: list, properties: dict, defs: dict,
                     header=ref.get("description"),
                     level=level + 1,
                 )
-                description += f" For details of configuration, see the [{ref_key} section](#{ref_key.lower().replace(" ", "-")})."
+                description += f" For details of configuration, see the [{ref_key} section](#{ref_key.lower().replace(' ', '-')})."
 
         else:
             type = properties[property].get("type", "")
@@ -57,7 +59,7 @@ def get_documentation_data(title: str, data: list, properties: dict, defs: dict,
                     header=ref.get("description"),
                     level=level + 1,
                 )
-                description += f" For details of configuration, see the [{ref_key} section](#{ref_key.lower().replace(" ", "-")})."
+                description += f" For details of configuration, see the [{ref_key} section](#{ref_key.lower().replace(' ', '-')})."
             else:
                 values = ref.get("enum", [])
 
@@ -68,21 +70,28 @@ def get_documentation_data(title: str, data: list, properties: dict, defs: dict,
     return data
 
 
-def convert_to_markdown(data: list):
-    markdown = ""
+def convert_field_to_string_if_dict(field):
+    if isinstance(field, dict):
+        return "`" + str(field) + "`"
+    return field
+
+
+def convert_to_markdown(data: list, header: str):
+    markdown = header + "\n<br></br>\n\n"
+
     for item in reversed(data):
-        markdown += f"{"#" * item["level"]} {item["title"]}\n"
+        markdown += f"{'#' * item['level']} {item['title']}\n"
         if item["header"]:
-            markdown += f"{item["header"]}\n<br>\n\n"
+            markdown += f"{item['header']}\n<br></br>\n\n"
 
         if len(item["table"]) > 0:
             markdown += "| Attribute | Type | Description | Required | Default | Values | Examples |\n"
             markdown += "| --- | --- | --- | --- | --- | --- | --- |\n"
             for row in item["table"]:
                 if len(row[5]) > 10:
-                    row[5] = "• " + "<br/>• ".join(row[5][:8]) + "<br/>• ..."
+                    row[5] = "• " + "<br></br>• ".join(row[5][:8]) + "<br></br>• ..."
                 elif len(row[5]) > 0:
-                    row[5] = "• " + "<br/>• ".join(row[5])
+                    row[5] = "• " + "<br></br>• ".join(row[5])
                 else:
                     row[5] = ""
 
@@ -91,22 +100,29 @@ def convert_to_markdown(data: list):
         elif item["header"] == "":
             markdown += "No settings."
 
-        markdown += "\n<br>\n\n"
+        markdown += "\n<br></br>\n\n"
 
     return markdown
 
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    assert args.output.endswith(".md"), "Output file must end with .md"
-    assert os.path.exists(os.path.dirname(args.output)), "Output directory does not exist"
+    assert args.output.endswith(".md"), f"Output file must end with .md ({args.output})"
+    assert os.path.exists(os.path.dirname(args.output)), f"Output directory does not exist ({os.path.dirname(args.output)})"
+    assert os.path.exists(args.header), f"Header file does not exist ({args.header})"
 
     schema = ConfigFile.model_json_schema()
     properties = schema["properties"]
     defs = schema["$defs"]
 
     data = get_documentation_data(title="All settings", data=[], properties=properties, header=schema.get("description", ""), defs=defs)
-    markdown = convert_to_markdown(data=data)
+
+    with open(file=args.header, mode="r") as f:
+        header = f.read()
+        f.close()
+
+    markdown = convert_to_markdown(data=data, header=header)
 
     with open(file=args.output, mode="w") as f:
         f.write(markdown)
+        f.close()
