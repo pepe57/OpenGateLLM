@@ -28,7 +28,7 @@ class QdrantVectorStoreClient(BaseVectorStoreClient, AsyncQdrantClient):
     default_method = SearchMethod.SEMANTIC
 
     def __init__(self, *args, **kwargs):
-        kwargs.pop("type")  # remove type from kwargs to avoid passing it to the super class
+        kwargs.pop("type", None)  # remove type from kwargs to avoid passing it to the super class
         AsyncQdrantClient.__init__(self, *args, **kwargs)
 
     async def check(self) -> bool:
@@ -43,6 +43,9 @@ class QdrantVectorStoreClient(BaseVectorStoreClient, AsyncQdrantClient):
         await AsyncQdrantClient.close(self)
 
     async def create_collection(self, collection_id: int, vector_size: int) -> None:
+        if await AsyncQdrantClient.collection_exists(self, collection_name=str(collection_id)):
+            return
+
         await AsyncQdrantClient.create_collection(
             self,
             collection_name=str(collection_id),
@@ -51,6 +54,9 @@ class QdrantVectorStoreClient(BaseVectorStoreClient, AsyncQdrantClient):
         await self.create_payload_index(collection_name=str(collection_id), field_name="id", field_schema=IntegerIndexType.INTEGER)
 
     async def delete_collection(self, collection_id: int) -> None:
+        if not await AsyncQdrantClient.collection_exists(self, collection_name=str(collection_id)):
+            return
+
         await AsyncQdrantClient.delete_collection(self, collection_name=str(collection_id))
 
     async def get_collections(self) -> list[int]:
