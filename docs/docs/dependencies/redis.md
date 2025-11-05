@@ -40,7 +40,7 @@ These metrics are used for monitoring and can be exposed via Prometheus when ena
 
 ### Prerequisites
 
-Redis Stack Server 7.2+ is required (includes the time-series module).
+Redis Stack Server 7.4+ is required (includes the time-series module).
 
 ### Configuration
 
@@ -52,10 +52,10 @@ Add a `redis` container in the `services` section of your `compose.yml` file:
 services:
   [...]
   redis:
-    image: redis/redis-stack-server:7.2.0-v11
+    image: redis/redis-stack-server:7.4.0-v7
     restart: always
     environment:
-      REDIS_ARGS: "--dir /data --requirepass ${REDIS_PASSWORD:-changeme} --user ${REDIS_USER:-redis} on >password ~* allcommands --save 60 1 --appendonly yes"
+      REDIS_ARGS: "--loadmodule /opt/redis-stack/lib/redistimeseries.so --dir /data --requirepass ${REDIS_PASSWORD:-changeme} --user ${REDIS_USER:-redis} on >password ~* allcommands --save 60 1 --appendonly yes"
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
@@ -65,6 +65,7 @@ services:
       interval: 4s
       timeout: 10s
       retries: 5
+      start_period: 60s
 
 volumes:
   redis:
@@ -112,3 +113,32 @@ For more information about the configuration file, see [Configuration](../gettin
         ```
 
         Theses metrics are stored in Redis time-series module to determine request prioritisation. For more information about request prioritisation, see [request prioritisation documentation](../models/request_prioritisation.md).
+
+### Security
+
+We recommend securing your Redis instance by keeping the version up-to-date.
+For production environment, we also recommend :
+- enabling protected mode
+- deactivating default user
+- create specific users with limited permissions
+- logging to specific log files
+- disabling syslog
+- disabling dangerous commands (FLUSHALL, FLUSHDB, etc.)
+
+It can be done by configuring the `REDIS_ARGS` environment variable in the `docker-compose.yml` or with a redis.conf file.
+Also consider this security hardening for your docker compose service.
+
+```
+  redis:
+    [...]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64M
+```
