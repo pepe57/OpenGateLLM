@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from contextvars import ContextVar
 from functools import wraps
 from itertools import batched
 import logging
@@ -7,20 +8,25 @@ from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 from langchain_text_splitters import Language
+from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import Integer, cast, delete, distinct, func, insert, or_, select, update
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.clients.model import BaseModelProvider as ModelProvider
 from api.clients.vector_store import BaseVectorStoreClient
 from api.helpers.data.chunkers import NoSplitter, RecursiveCharacterTextSplitter
-from api.helpers.models.routers import ModelRouter
+from api.helpers.models import ModelRegistry
 from api.schemas.chunks import Chunk
 from api.schemas.collections import Collection, CollectionVisibility
+from api.schemas.core.context import RequestContext
 from api.schemas.documents import Chunker, Document
 from api.schemas.parse import ParsedDocument, ParsedDocumentOutputFormat
 from api.schemas.search import Search
 from api.sql.models import Collection as CollectionTable
 from api.sql.models import Document as DocumentTable
+from api.sql.models import Provider as ProviderTable
+from api.sql.models import Router as RouterTable
 from api.sql.models import User as UserTable
 from api.utils.exceptions import ChunkingFailedException, CollectionNotFoundException, DocumentNotFoundException, VectorizationFailedException
 from api.utils.variables import ENDPOINT__EMBEDDINGS
@@ -59,7 +65,7 @@ class DocumentManager:
     def __init__(
         self,
         vector_store: BaseVectorStoreClient,
-        vector_store_model: ModelRouter,
+        vector_store_model: str,
         parser_manager: ParserManager,
         web_search_manager: WebSearchManager | None = None,
     ) -> None:
@@ -70,11 +76,12 @@ class DocumentManager:
 
     @check_dependencies(dependencies=["vector_store"])
     async def create_collection(self, session: AsyncSession, user_id: int, name: str, visibility: CollectionVisibility, description: str | None = None) -> int:  # fmt: off
-        result = await session.execute(
-            statement=insert(table=CollectionTable)
+        query = (
+            insert(table=CollectionTable)
             .values(name=name, user_id=user_id, visibility=visibility, description=description)
             .returning(CollectionTable.id)
         )
+        result = await session.execute(statement=query)
         collection_id = result.scalar_one()
         await session.commit()
 
@@ -143,8 +150,8 @@ class DocumentManager:
                 CollectionTable.visibility,
                 CollectionTable.description,
                 func.count(distinct(DocumentTable.id)).label("documents"),
-                cast(func.extract("epoch", CollectionTable.created_at), Integer).label("created_at"),
-                cast(func.extract("epoch", CollectionTable.updated_at), Integer).label("updated_at"),
+                cast(func.extract("epoch", CollectionTable.created), Integer).label("created"),
+                cast(func.extract("epoch", CollectionTable.updated), Integer).label("updated"),
             )
             .outerjoin(DocumentTable, CollectionTable.id == DocumentTable.collection_id)
             .outerjoin(UserTable, CollectionTable.user_id == UserTable.id)
@@ -174,7 +181,9 @@ class DocumentManager:
     async def create_document(
         self,
         session: AsyncSession,
-        user_id: int,
+        redis_client: AsyncRedis,
+        model_registry: ModelRegistry,
+        request_context: ContextVar[RequestContext],
         collection_id: int,
         document: ParsedDocument,
         chunker: Chunker,
@@ -189,7 +198,9 @@ class DocumentManager:
     ) -> int:
         # check if collection exists and prepare document chunks in a single transaction
         result = await session.execute(
-            statement=select(CollectionTable).where(CollectionTable.id == collection_id).where(CollectionTable.user_id == user_id)
+            statement=select(CollectionTable)
+            .where(CollectionTable.id == collection_id)
+            .where(CollectionTable.user_id == request_context.get().user_info.id)
         )
         try:
             result.scalar_one()
@@ -198,7 +209,16 @@ class DocumentManager:
 
         try:
             # create index only when the first document is created to avoid increase shard with empty collections
-            await self.vector_store.create_collection(collection_id=collection_id, vector_size=self.vector_store_model._vector_size)
+            query = (
+                select(ProviderTable.vector_size)
+                .where(RouterTable.name == self.vector_store_model)
+                .join(RouterTable, ProviderTable.router_id == RouterTable.id)
+            ).limit(1)
+            result = await session.execute(query)
+            vector_size = result.scalar_one()
+
+            await self.vector_store.create_collection(collection_id=collection_id, vector_size=vector_size)
+
         except Exception as e:
             logger.exception(msg=f"Error during collection ({collection_id}) creation: {e}", exc_info=True)
             raise VectorizationFailedException()
@@ -234,13 +254,19 @@ class DocumentManager:
         for chunk in chunks:
             chunk.metadata["collection_id"] = collection_id
             chunk.metadata["document_id"] = document_id
-            chunk.metadata["document_created_at"] = round(time.time())
+            chunk.metadata["document_created"] = round(time.time())
         try:
-            await self._upsert(chunks=chunks, collection_id=collection_id)
+            await self._upsert(
+                chunks=chunks,
+                collection_id=collection_id,
+                redis_client=redis_client,
+                session=session,
+                model_registry=model_registry,
+                request_context=request_context,
+            )
         except Exception as e:
             logger.exception(msg=f"Error during document creation: {e}")
-            await self.delete_document(session=session, user_id=user_id, document_id=document_id)
-
+            await self.delete_document(session=session, user_id=request_context.get().user_info.id, document_id=document_id)
             raise VectorizationFailedException(detail=f"Vectorization failed: {e}")
 
         return document_id
@@ -252,7 +278,7 @@ class DocumentManager:
                 DocumentTable.id,
                 DocumentTable.name,
                 DocumentTable.collection_id,
-                cast(func.extract("epoch", DocumentTable.created_at), Integer).label("created_at"),
+                cast(func.extract("epoch", DocumentTable.created), Integer).label("created"),
             )
             .offset(offset=offset)
             .limit(limit=limit)
@@ -348,8 +374,10 @@ class DocumentManager:
     async def search_chunks(
         self,
         session: AsyncSession,
+        redis_client: AsyncRedis,
+        model_registry: ModelRegistry,
+        request_context: ContextVar[RequestContext],
         collection_ids: list[int],
-        user_id: int,
         prompt: str,
         method: str,
         limit: int,
@@ -361,7 +389,14 @@ class DocumentManager:
     ) -> list[Search]:
         web_collection_id = None
         if web_search:
-            web_collection_id = await self._create_web_collection(session=session, user_id=user_id, prompt=prompt, k=web_search_k)
+            web_collection_id = await self._create_web_collection(
+                session=session,
+                model_registry=model_registry,
+                redis_client=redis_client,
+                request_context=request_context,
+                prompt=prompt,
+                k=web_search_k,
+            )
         if web_collection_id:
             collection_ids.append(web_collection_id)
 
@@ -370,7 +405,7 @@ class DocumentManager:
             result = await session.execute(
                 statement=select(CollectionTable)
                 .where(CollectionTable.id == collection_id)
-                .where(or_(CollectionTable.user_id == user_id, CollectionTable.visibility == CollectionVisibility.PUBLIC))
+                .where(or_(CollectionTable.user_id == request_context.get().user_info.id, CollectionTable.visibility == CollectionVisibility.PUBLIC))
             )
             try:
                 result.scalar_one()
@@ -380,7 +415,15 @@ class DocumentManager:
         if not collection_ids:
             return []  # to avoid a request to create a query vector
 
-        response = await self._create_embeddings(input_texts=[prompt])
+        provider = await model_registry.get_model_provider(
+            model=self.vector_store_model,
+            endpoint=ENDPOINT__EMBEDDINGS,
+            session=session,
+            redis_client=redis_client,
+            request_context=request_context,
+        )
+
+        response = await self._create_embeddings(provider=provider, input_texts=[prompt], redis_client=redis_client)
         query_vector = response[0]
 
         searches = await self.vector_store.search(
@@ -394,7 +437,7 @@ class DocumentManager:
             score_threshold=score_threshold,
         )
         if web_collection_id:
-            await self.delete_collection(session=session, user_id=user_id, collection_id=web_collection_id)
+            await self.delete_collection(session=session, user_id=request_context.get().user_info.id, collection_id=web_collection_id)
 
         return searches
 
@@ -402,18 +445,26 @@ class DocumentManager:
     async def _create_web_collection(
         self,
         session: AsyncSession,
-        user_id: int,
+        model_registry: ModelRegistry,
+        redis_client: AsyncRedis,
+        request_context: ContextVar[RequestContext],
         prompt: str,
         k: int = 5,
     ) -> int | None:
-        web_query = await self.web_search_manager.get_web_query(prompt=prompt)
+        web_query = await self.web_search_manager.get_web_query(
+            prompt=prompt,
+            model_registry=model_registry,
+            session=session,
+            redis_client=redis_client,
+            request_context=request_context,
+        )
         web_results = await self.web_search_manager.get_results(query=web_query, k=k)
         collection_id = None
         if web_results:
             collection_id = await self.create_collection(
                 session=session,
                 name=f"tmp_web_collection_{uuid4()}",
-                user_id=user_id,
+                user_id=request_context.get().user_info.id,
                 visibility=CollectionVisibility.PRIVATE,
             )
             for file in web_results:
@@ -427,7 +478,9 @@ class DocumentManager:
                 )
                 await self.create_document(
                     session=session,
-                    user_id=user_id,
+                    redis_client=redis_client,
+                    model_registry=model_registry,
+                    request_context=request_context,
                     collection_id=collection_id,
                     document=document,
                     chunker=Chunker.RECURSIVE_CHARACTER_TEXT_SPLITTER,
@@ -471,22 +524,37 @@ class DocumentManager:
 
         return chunks
 
-    async def _create_embeddings(self, input_texts: list[str]) -> list[float] | list[list[float]] | dict:
-        async def handler(client):
-            response = await client.forward_request(
-                method="POST", json={"input": input_texts, "model": self.vector_store_model.name, "encoding_format": "float"}
-            )
+    async def _create_embeddings(self, provider: ModelProvider, input_texts: list[str], redis_client: AsyncRedis) -> list[float]:
+        response = await provider.forward_request(
+            method="POST",
+            json={"input": input_texts, "model": self.vector_store_model, "encoding_format": "float"},
+            endpoint=ENDPOINT__EMBEDDINGS,
+            redis_client=redis_client,
+        )
+        return [vector["embedding"] for vector in response.json()["data"]]
 
-            return [vector["embedding"] for vector in response.json()["data"]]
+    async def _upsert(
+        self,
+        chunks: list[Chunk],
+        collection_id: int,
+        redis_client: AsyncRedis,
+        session: AsyncSession,
+        model_registry: ModelRegistry,
+        request_context: ContextVar[RequestContext],
+    ) -> None:
+        provider = await model_registry.get_model_provider(
+            model=self.vector_store_model,
+            endpoint=ENDPOINT__EMBEDDINGS,
+            session=session,
+            request_context=request_context,
+            redis_client=redis_client,
+        )
 
-        return await self.vector_store_model.safe_client_access(endpoint=ENDPOINT__EMBEDDINGS, handler=handler)
-
-    async def _upsert(self, chunks: list[Chunk], collection_id: int) -> None:
         batches = batched(iterable=chunks, n=self.BATCH_SIZE)
         for batch in batches:
             # create embeddings
             texts = [chunk.content for chunk in batch]
-            embeddings = await self._create_embeddings(input_texts=texts)
+            embeddings = await self._create_embeddings(provider=provider, input_texts=texts, redis_client=redis_client)
 
             # insert chunks and vectors
             await self.vector_store.upsert(collection_id=collection_id, chunks=batch, embeddings=embeddings)

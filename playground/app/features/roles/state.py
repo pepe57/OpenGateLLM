@@ -65,8 +65,8 @@ class RolesState(ChatState):
                     permissions=[permission.replace("_", " ").capitalize() for permission in role.permissions],
                     limits=role.limits,
                     users=role.users,
-                    created_at=datetime.datetime.fromtimestamp(role.created_at).strftime("%Y-%m-%d %H:%M"),
-                    updated_at=datetime.datetime.fromtimestamp(role.updated_at).strftime("%Y-%m-%d %H:%M"),
+                    created=datetime.datetime.fromtimestamp(role.created).strftime("%Y-%m-%d %H:%M"),
+                    updated=datetime.datetime.fromtimestamp(role.updated).strftime("%Y-%m-%d %H:%M"),
                 )
             )
         return formatted
@@ -229,7 +229,7 @@ class RolesState(ChatState):
                     f"{self.opengatellm_url}/v1/admin/roles",
                     params=params,
                     headers={"Authorization": f"Bearer {self.api_key}"},
-                    timeout=10.0,
+                    timeout=60.0,
                 )
 
                 if response.status_code != 200:
@@ -245,8 +245,8 @@ class RolesState(ChatState):
                             permissions=r["permissions"],
                             limits=[Limit(**lim) for lim in r["limits"]],
                             users=r.get("users", 0),
-                            created_at=r["created_at"],
-                            updated_at=r["updated_at"],
+                            created=r["created"],
+                            updated=r["updated"],
                         )
                         for r in roles_data
                     ]
@@ -298,7 +298,7 @@ class RolesState(ChatState):
                     f"{self.opengatellm_url}/v1/admin/roles",
                     json=payload,
                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                    timeout=10.0,
+                    timeout=60.0,
                 )
 
                 if response.status_code == 201:
@@ -329,7 +329,7 @@ class RolesState(ChatState):
                 response = await client.delete(
                     f"{self.opengatellm_url}/v1/admin/roles/{role_id}",
                     headers={"Authorization": f"Bearer {self.api_key}"},
-                    timeout=10.0,
+                    timeout=60.0,
                 )
 
                 if response.status_code == 204:
@@ -372,7 +372,7 @@ class RolesState(ChatState):
                     f"{self.opengatellm_url}/v1/admin/roles/{self.role_to_edit}",
                     json=payload,
                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                    timeout=10.0,
+                    timeout=60.0,
                 )
 
                 if response.status_code == 204:
@@ -467,7 +467,7 @@ class RolesState(ChatState):
                     f"{self.opengatellm_url}/v1/admin/roles/{role_id}",
                     json=payload,
                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                    timeout=10.0,
+                    timeout=60.0,
                 )
 
                 if response.status_code == 204:
@@ -527,7 +527,7 @@ class RolesState(ChatState):
                     f"{self.opengatellm_url}/v1/admin/roles/{role_id}",
                     json=payload,
                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                    timeout=10.0,
+                    timeout=60.0,
                 )
 
                 if response.status_code == 204:

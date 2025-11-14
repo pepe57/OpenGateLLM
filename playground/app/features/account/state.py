@@ -20,13 +20,13 @@ class AccountState(AuthState):
     password_change_loading: bool = False
 
     @rx.var
-    def user_created_at_formatted(self) -> str:
-        """Format created_at timestamp."""
-        if self.user_created_at is None:
+    def user_created_formatted(self) -> str:
+        """Format created timestamp."""
+        if self.user_created is None:
             return "N/A"
         import datetime
 
-        return datetime.datetime.fromtimestamp(self.user_created_at).strftime("%Y-%m-%d %H:%M")
+        return datetime.datetime.fromtimestamp(self.user_created).strftime("%Y-%m-%d %H:%M")
 
     @rx.var
     def user_budget_formatted(self) -> str:
@@ -70,7 +70,7 @@ class AccountState(AuthState):
                         "current_password": self.current_password,
                         "password": self.new_password,
                     },
-                    timeout=10.0,
+                    timeout=60.0,
                 )
 
                 if response.status_code == 204:
@@ -115,7 +115,7 @@ class AccountState(AuthState):
                     f"{self.opengatellm_url}/v1/me/info",
                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
                     json={"name": self.edit_name.strip()},
-                    timeout=10.0,
+                    timeout=60.0,
                 )
 
                 if response.status_code == 204:

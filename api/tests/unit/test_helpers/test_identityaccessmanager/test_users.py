@@ -60,7 +60,7 @@ async def test_create_user_success(session: AsyncSession, iam: IdentityAccessMan
         role_id=1,
         organization_id=None,
         budget=12.5,
-        expires_at=int(dt.datetime.now(tz=dt.UTC).timestamp()) + 100,
+        expires=int(dt.datetime.now(tz=dt.UTC).timestamp()) + 100,
         sub="sub123",
     )
 
@@ -112,7 +112,7 @@ async def test_update_user_success_all_fields(session: AsyncSession, iam: Identi
     # select user with join role
     session.execute = AsyncMock(
         side_effect=[
-            _Result(all_rows=[MagicMock(id=1, name="alice", role_id=1, budget=None, expires_at=None, role="role")]),
+            _Result(all_rows=[MagicMock(id=1, name="alice", role_id=1, budget=None, expires=None, role="role")]),
             _Result(scalar_one=1),  # check new role exists when different
             _Result(scalar_one=1),  # check organization exists
             None,  # update
@@ -126,7 +126,7 @@ async def test_update_user_success_all_fields(session: AsyncSession, iam: Identi
         role_id=2,
         organization_id=3,
         budget=100.0,
-        expires_at=int(dt.datetime.now(tz=dt.UTC).timestamp()) + 100,
+        expires=int(dt.datetime.now(tz=dt.UTC).timestamp()) + 100,
     )
 
     session.commit.assert_awaited()
@@ -144,7 +144,7 @@ async def test_update_user_not_found(session: AsyncSession, iam: IdentityAccessM
 async def test_update_user_role_missing(session: AsyncSession, iam: IdentityAccessManager):
     session.execute = AsyncMock(
         side_effect=[
-            _Result(all_rows=[MagicMock(id=1, name="alice", role_id=1, budget=None, expires_at=None, role="role")]),
+            _Result(all_rows=[MagicMock(id=1, name="alice", role_id=1, budget=None, expires=None, role="role")]),
             _Result(scalar_one=NoResultFound()),
         ]
     )
@@ -157,7 +157,7 @@ async def test_update_user_role_missing(session: AsyncSession, iam: IdentityAcce
 async def test_update_user_org_missing(session: AsyncSession, iam: IdentityAccessManager):
     session.execute = AsyncMock(
         side_effect=[
-            _Result(all_rows=[MagicMock(id=1, name="alice", role_id=1, budget=None, expires_at=None, role="role")]),
+            _Result(all_rows=[MagicMock(id=1, name="alice", role_id=1, budget=None, expires=None, role="role")]),
             _Result(scalar_one=NoResultFound()),  # organization lookup -> not found
         ]
     )
@@ -176,9 +176,9 @@ async def test_get_users_filters_and_not_found(session: AsyncSession, iam: Ident
                 "role": 1,
                 "organization": None,
                 "budget": None,
-                "expires_at": None,
-                "created_at": 10,
-                "updated_at": 11,
+                "expires": None,
+                "created": 10,
+                "updated": 11,
                 "email": "alice@example.com",
                 "sub": "sub",
                 "priority": 0,
@@ -202,11 +202,29 @@ async def test_get_user_info_master_user(iam: IdentityAccessManager, session: As
     # When user_id is 0, returns master info with all permissions and all non-zero limits
     from types import SimpleNamespace
 
-    # Provide a fake model_registry with models list to avoid NoneType error by patching the module variable used
+    # Provide a fake model_registry with async get_routers returning routers with ids
     import api.helpers._identityaccessmanager as iam_mod
     from api.schemas.admin.roles import LimitType, PermissionType
 
-    monkeypatch.setattr(iam_mod.global_context, "model_registry", SimpleNamespace(models=["gpt-4"]), raising=False)
+    class _Router:
+        def __init__(self, router_id: int):
+            self.id = router_id
+
+    original_user_info = iam_mod.UserInfo
+
+    class _UserInfo(original_user_info):
+        def __init__(self, **kwargs):
+            kwargs.setdefault("created", 0)
+            kwargs.setdefault("updated", 0)
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(
+        iam_mod.global_context,
+        "model_registry",
+        SimpleNamespace(get_routers=AsyncMock(return_value=[_Router(1)])),
+        raising=False,
+    )
+    monkeypatch.setattr(iam_mod, "UserInfo", _UserInfo, raising=False)
 
     user = await iam.get_user_info(session=session, user_id=0)
 
@@ -218,6 +236,8 @@ async def test_get_user_info_master_user(iam: IdentityAccessManager, session: As
     # limits list is built from global_context.model_registry.models; we only assert structure
     assert all(limit.value is None or limit.value >= 0 for limit in user.limits)
     assert all(limit.type in list(LimitType) for limit in user.limits)
+    assert user.created == 0
+    assert user.updated == 0
 
 
 @pytest.mark.asyncio
@@ -229,9 +249,9 @@ async def test_get_user_info_by_id_success(session: AsyncSession, iam: IdentityA
         "role": 2,
         "organization": None,
         "budget": 10.0,
-        "expires_at": 123,
-        "created_at": 10,
-        "updated_at": 11,
+        "expires": 123,
+        "created": 10,
+        "updated": 11,
         "email": "alice@example.com",
         "sub": None,
         "priority": 0,
@@ -245,9 +265,9 @@ async def test_get_user_info_by_id_success(session: AsyncSession, iam: IdentityA
             return dict(self._data)
 
     class _LimitRow:
-        def __init__(self, role_id, model, type, value):
+        def __init__(self, role_id, router_id, type, value):
             self.role_id = role_id
-            self.model = model
+            self.router_id = router_id
             self.type = type
             self.value = value
 
@@ -258,14 +278,12 @@ async def test_get_user_info_by_id_success(session: AsyncSession, iam: IdentityA
 
     # Sequence: get_users -> roles rows, limits rows, permissions rows (get_roles won't fetch ids when role_id provided)
     roles_rows = [
-        _RowDict({"id": 2, "name": "role", "created_at": 100, "updated_at": 101, "users": 1}),
+        _RowDict({"id": 2, "name": "role", "created": 100, "updated": 101, "users": 1}),
     ]
 
     from api.schemas.admin.roles import LimitType, PermissionType
 
-    limits_iter = [
-        _LimitRow(2, "gpt-4", LimitType.TPM, 100),
-    ]
+    limits_iter = [_LimitRow(2, 101, LimitType.TPM, 100)]
     permissions_iter = [
         _PermissionRow(2, PermissionType.READ_METRIC),
     ]
@@ -292,9 +310,9 @@ async def test_get_user_info_by_id_success(session: AsyncSession, iam: IdentityA
     assert user.name == "alice"
     assert user.organization is None
     assert user.budget == 10.0
-    assert user.expires_at == 123
-    assert user.created_at == 10
-    assert user.updated_at == 11
+    assert user.expires == 123
+    assert user.created == 10
+    assert user.updated == 11
     assert len(user.permissions) == 1
     assert len(user.limits) == 1
 
@@ -308,9 +326,9 @@ async def test_get_user_info_by_email_success(session: AsyncSession, iam: Identi
         "role": 3,
         "organization": 9,
         "budget": None,
-        "expires_at": None,
-        "created_at": 20,
-        "updated_at": 21,
+        "expires": None,
+        "created": 20,
+        "updated": 21,
         "email": "bob@example.com",
         "sub": None,
         "priority": 0,
@@ -324,9 +342,9 @@ async def test_get_user_info_by_email_success(session: AsyncSession, iam: Identi
             return dict(self._data)
 
     class _LimitRow:
-        def __init__(self, role_id, model, type, value):
+        def __init__(self, role_id, router_id, type, value):
             self.role_id = role_id
-            self.model = model
+            self.router_id = router_id
             self.type = type
             self.value = value
 
@@ -339,11 +357,9 @@ async def test_get_user_info_by_email_success(session: AsyncSession, iam: Identi
 
     # No ids page when role_id is provided to get_roles
     roles_rows = [
-        _RowDict({"id": 3, "name": "role", "created_at": 200, "updated_at": 201, "users": 1}),
+        _RowDict({"id": 3, "name": "role", "created": 200, "updated": 201, "users": 1}),
     ]
-    limits_iter = [
-        _LimitRow(3, "mistral", LimitType.RPM, 200),
-    ]
+    limits_iter = [_LimitRow(3, 202, LimitType.RPM, 200)]
     permissions_iter = [
         _PermissionRow(3, PermissionType.ADMIN),
     ]
@@ -366,11 +382,11 @@ async def test_get_user_info_by_email_success(session: AsyncSession, iam: Identi
     assert user.name == "bob"
     assert user.organization == 9
     assert user.budget is None
-    assert user.expires_at is None
-    assert user.created_at == 20
-    assert user.updated_at == 21
+    assert user.expires is None
+    assert user.created == 20
+    assert user.updated == 21
     assert any(p.value == "admin" for p in user.permissions)
-    assert any(limit.model == "mistral" and limit.value == 200 for limit in user.limits)
+    assert any(limit.router == 202 and limit.type == LimitType.RPM and limit.value == 200 for limit in user.limits)
 
 
 @pytest.mark.asyncio
@@ -390,9 +406,9 @@ async def test_get_users_with_id_and_role_id(session: AsyncSession, iam: Identit
                 "role": 1,
                 "organization": None,
                 "budget": None,
-                "expires_at": None,
-                "created_at": 10,
-                "updated_at": 11,
+                "expires": None,
+                "created": 10,
+                "updated": 11,
                 "email": "alice@example.com",
                 "sub": "sub",
                 "priority": 0,
@@ -420,9 +436,9 @@ async def test_get_users_with_role_id_only(session: AsyncSession, iam: IdentityA
                 "role": 1,
                 "organization": None,
                 "budget": None,
-                "expires_at": None,
-                "created_at": 10,
-                "updated_at": 11,
+                "expires": None,
+                "created": 10,
+                "updated": 11,
                 "email": "alice@example.com",
                 "sub": "sub",
                 "priority": 0,
@@ -435,9 +451,9 @@ async def test_get_users_with_role_id_only(session: AsyncSession, iam: IdentityA
                 "role": 1,
                 "organization": None,
                 "budget": None,
-                "expires_at": None,
-                "created_at": 20,
-                "updated_at": 21,
+                "expires": None,
+                "created": 20,
+                "updated": 21,
                 "email": "bob@example.com",
                 "sub": "sub",
                 "priority": 0,
@@ -464,9 +480,9 @@ async def test_get_users_with_id_only(session: AsyncSession, iam: IdentityAccess
                 "role": 1,
                 "organization": None,
                 "budget": None,
-                "expires_at": None,
-                "created_at": 10,
-                "updated_at": 11,
+                "expires": None,
+                "created": 10,
+                "updated": 11,
                 "email": "alice@example.com",
                 "sub": "sub",
                 "priority": 0,
@@ -494,9 +510,9 @@ async def test_get_users_no_params(session: AsyncSession, iam: IdentityAccessMan
                 "role": 1,
                 "organization": None,
                 "budget": None,
-                "expires_at": None,
-                "created_at": 10,
-                "updated_at": 11,
+                "expires": None,
+                "created": 10,
+                "updated": 11,
                 "email": "alice@example.com",
                 "sub": "sub",
                 "priority": 0,
@@ -509,9 +525,9 @@ async def test_get_users_no_params(session: AsyncSession, iam: IdentityAccessMan
                 "role": 1,
                 "organization": None,
                 "budget": None,
-                "expires_at": None,
-                "created_at": 20,
-                "updated_at": 21,
+                "expires": None,
+                "created": 20,
+                "updated": 21,
                 "email": "bob@example.com",
                 "sub": "sub",
                 "priority": 0,

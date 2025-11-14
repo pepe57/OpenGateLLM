@@ -68,10 +68,10 @@ async def test_login_success_user(session: AsyncSession, iam: IdentityAccessMana
             organization=None,
             budget=None,
             permissions=[PermissionType.READ_METRIC],
-            limits=[Limit(model="gpt-4", type=LimitType.TPM, value=100)],
-            expires_at=None,
-            created_at=10,
-            updated_at=11,
+            limits=[Limit(router=1, type=LimitType.TPM, value=100)],
+            expires=None,
+            created=10,
+            updated=11,
         )
     )
 
@@ -108,9 +108,9 @@ async def test_login_wrong_password(session: AsyncSession, iam: IdentityAccessMa
             budget=None,
             permissions=[],
             limits=[],
-            expires_at=None,
-            created_at=0,
-            updated_at=0,
+            expires=None,
+            created=0,
+            updated=0,
         )
     )
     session.execute = AsyncMock(return_value=_Result(scalar_one="hashed"))

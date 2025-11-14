@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.helpers._accesscontroller import AccessController
-from api.schemas.admin.roles import PermissionType, Role, RoleRequest, Roles, RolesResponse, RoleUpdateRequest
+from api.schemas.admin.roles import CreateRole, PermissionType, Role, Roles, RolesResponse, RoleUpdateRequest
 from api.sql.session import get_db_session
 from api.utils.context import global_context
 from api.utils.variables import ENDPOINT__ADMIN_ROLES, ROUTER__ADMIN
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/v1", tags=[ROUTER__ADMIN.title()])
 )
 async def create_role(
     request: Request,
-    body: RoleRequest = Body(description="The role creation request."),
+    body: CreateRole = Body(description="The role creation request."),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
     """
@@ -110,7 +110,7 @@ async def get_roles(
     request: Request,
     offset: int = Query(default=0, ge=0, description="The offset of the roles to get."),
     limit: int = Query(default=10, ge=1, le=100, description="The limit of the roles to get."),
-    order_by: Literal["id", "name", "created_at", "updated_at"] = Query(default="id", description="The field to order the roles by."),
+    order_by: Literal["id", "name", "created", "updated"] = Query(default="id", description="The field to order the roles by."),
     order_direction: Literal["asc", "desc"] = Query(default="asc", description="The direction to order the roles by."),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:

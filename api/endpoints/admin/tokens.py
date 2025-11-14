@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.helpers._accesscontroller import AccessController
 from api.schemas.admin.roles import PermissionType
-from api.schemas.admin.tokens import Token, TokenRequest, Tokens, TokensResponse
+from api.schemas.admin.tokens import CreateToken, Token, Tokens, TokensResponse
 from api.sql.session import get_db_session
 from api.utils.context import global_context
 from api.utils.variables import ENDPOINT__ADMIN_TOKENS, ROUTER__ADMIN
@@ -22,7 +22,7 @@ router = APIRouter(prefix="/v1", tags=[ROUTER__ADMIN.title()])
 )
 async def create_token(
     request: Request,
-    body: TokenRequest = Body(description="The token creation request."),
+    body: CreateToken = Body(description="The token creation request."),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
     """
@@ -33,7 +33,7 @@ async def create_token(
         session=session,
         user_id=body.user,
         name=body.name,
-        expires_at=body.expires_at,
+        expires=body.expires,
     )
 
     return JSONResponse(status_code=201, content={"id": token_id, "token": token})
@@ -90,7 +90,7 @@ async def get_tokens(
     user: int | None = Query(default=None, description="The user ID of the user to get the tokens for."),
     offset: int = Query(default=0, ge=0, description="The offset of the tokens to get."),
     limit: int = Query(default=10, ge=1, le=100, description="The limit of the tokens to get."),
-    order_by: Literal["id", "name", "created_at"] = Query(default="id", description="The field to order the tokens by."),
+    order_by: Literal["id", "name", "created"] = Query(default="id", description="The field to order the tokens by."),
     order_direction: Literal["asc", "desc"] = Query(default="asc", description="The direction to order the tokens by."),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:

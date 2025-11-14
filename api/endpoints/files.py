@@ -1,3 +1,4 @@
+from contextvars import ContextVar
 from io import BytesIO
 import json
 from pathlib import Path
@@ -5,15 +6,19 @@ from pathlib import Path
 from fastapi import APIRouter, Body, Depends, File, Security, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers
 
 from api.helpers._accesscontroller import AccessController
+from api.helpers.models import ModelRegistry
+from api.schemas.core.context import RequestContext
 from api.schemas.core.documents import JsonFile
 from api.schemas.files import ChunkerArgs, FileResponse, FilesRequest
 from api.schemas.parse import ParsedDocumentOutputFormat
 from api.sql.session import get_db_session
-from api.utils.context import global_context, request_context
+from api.utils.context import global_context
+from api.utils.dependencies import get_model_registry, get_redis_client, get_request_context
 from api.utils.exceptions import CollectionNotFoundException, FileSizeLimitExceededException, InvalidJSONFormatException
 from api.utils.variables import ENDPOINT__FILES
 
@@ -24,7 +29,10 @@ router = APIRouter(prefix="/v1", tags=["Legacy"])
 async def upload_file(
     file: UploadFile = File(...),
     request: FilesRequest = Body(...),
+    redis_client: AsyncRedis = Depends(get_redis_client),
+    model_registry: ModelRegistry = Depends(get_model_registry),
     session: AsyncSession = Depends(get_db_session),
+    request_context: ContextVar[RequestContext] = Depends(get_request_context),
 ) -> JSONResponse:
     """
     **[DEPRECATED]** Upload a file to be processed, chunked, and stored into a vector database. Supported file types : pdf, html, json.
@@ -90,8 +98,10 @@ async def upload_file(
         )
 
         document_id = await global_context.document_manager.create_document(
-            user_id=request_context.get().user_info.id,
+            request_context=request_context,
             session=session,
+            redis_client=redis_client,
+            model_registry=model_registry,
             collection_id=request.collection,
             document=document,
             chunker=chunker,

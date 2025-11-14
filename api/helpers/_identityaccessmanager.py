@@ -19,11 +19,11 @@ from api.sql.models import Organization as OrganizationTable
 from api.sql.models import Permission as PermissionTable
 from api.sql.models import Role as RoleTable
 from api.sql.models import Token as TokenTable
-from api.sql.models import Usage as UsageTable
 from api.sql.models import User as UserTable
 from api.utils.configuration import configuration
 from api.utils.context import global_context
 from api.utils.exceptions import (
+    DeleteOrganizationWithUsersException,
     DeleteRoleWithUsersException,
     InvalidCurrentPasswordException,
     InvalidTokenExpirationException,
@@ -58,9 +58,9 @@ class IdentityAccessManager:
         token = token.split(IdentityAccessManager.TOKEN_PREFIX)[1]
         return jwt.decode(token=token, key=self.master_key, algorithms=["HS256"])
 
-    def _encode_token(self, user_id: int, token_id: int, expires_at: int | None = None) -> str:
+    def _encode_token(self, user_id: int, token_id: int, expires: int | None = None) -> str:
         return IdentityAccessManager.TOKEN_PREFIX + jwt.encode(
-            claims={"user_id": user_id, "token_id": token_id, "expires_at": expires_at},
+            claims={"user_id": user_id, "token_id": token_id, "expires": expires},
             key=self.master_key,
             algorithm="HS256",
         )
@@ -88,7 +88,7 @@ class IdentityAccessManager:
 
         # create the limits
         for limit in limits:
-            await session.execute(statement=insert(table=LimitTable).values(role_id=role_id, model=limit.model, type=limit.type, value=limit.value))  # fmt: off
+            await session.execute(statement=insert(table=LimitTable).values(role_id=role_id, router_id=limit.router, type=limit.type, value=limit.value))  # fmt: off
 
         # create the permissions
         for permission in permissions:
@@ -138,7 +138,7 @@ class IdentityAccessManager:
             await session.execute(statement=delete(table=LimitTable).where(LimitTable.role_id == role.id))
 
             # create the new limits
-            values = [{"role_id": role.id, "model": limit.model, "type": limit.type, "value": limit.value} for limit in limits]
+            values = [{"role_id": role.id, "router_id": limit.router, "type": limit.type, "value": limit.value} for limit in limits]
             if values:
                 await session.execute(statement=insert(table=LimitTable).values(values))
 
@@ -160,7 +160,7 @@ class IdentityAccessManager:
         role_id: int | None = None,
         offset: int = 0,
         limit: int = 10,
-        order_by: Literal["id", "name", "created_at", "updated_at"] = "id",
+        order_by: Literal["id", "name", "created", "updated"] = "id",
         order_direction: Literal["asc", "desc"] = "asc",
     ) -> list[Role]:
         if role_id is None:
@@ -176,8 +176,8 @@ class IdentityAccessManager:
             select(
                 RoleTable.id,
                 RoleTable.name,
-                cast(func.extract("epoch", RoleTable.created_at), Integer).label("created_at"),
-                cast(func.extract("epoch", RoleTable.updated_at), Integer).label("updated_at"),
+                cast(func.extract("epoch", RoleTable.created), Integer).label("created"),
+                cast(func.extract("epoch", RoleTable.updated), Integer).label("updated"),
                 func.count(distinct(UserTable.id)).label("users"),
             )
             .outerjoin(UserTable, RoleTable.id == UserTable.role_id)
@@ -198,24 +198,28 @@ class IdentityAccessManager:
             roles[row["id"]] = Role(
                 id=row["id"],
                 name=row["name"],
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
+                created=row["created"],
+                updated=row["updated"],
                 users=row["users"],
                 limits=[],
                 permissions=[],
             )
 
-        # Query limits for these roles
         if roles:
-            limits_query = select(LimitTable.role_id, LimitTable.model, LimitTable.type, LimitTable.value).where(
-                LimitTable.role_id.in_(list(roles.keys()))
-            )
+            # Query limits for these roles
+            limits_query = select(
+                LimitTable.role_id,
+                LimitTable.router_id,
+                LimitTable.type,
+                LimitTable.value,
+            ).where(LimitTable.role_id.in_(list(roles.keys())))
 
             result = await session.execute(limits_query)
             for row in result:
                 role_id = row.role_id
                 if role_id in roles:
-                    roles[role_id].limits.append(Limit(model=row.model, type=row.type, value=row.value))
+                    roles[role_id].limits.append(Limit(router=row.router_id, type=row.type, value=row.value))
+
             # Query permissions for these roles
             permissions_query = select(PermissionTable.role_id, PermissionTable.permission).where(PermissionTable.role_id.in_(list(roles.keys())))
 
@@ -224,6 +228,7 @@ class IdentityAccessManager:
                 role_id = row.role_id
                 if role_id in roles:
                     roles[role_id].permissions.append(PermissionType(value=row.permission))
+
         return list(roles.values())
 
     async def create_user(
@@ -237,13 +242,13 @@ class IdentityAccessManager:
         iss: str | None = None,
         organization_id: int | None = None,
         budget: float | None = None,
-        expires_at: int | None = None,
+        expires: int | None = None,
         priority: int = 0,
     ) -> int:
         if email == "master":
             raise ReservedEmailException()
 
-        expires_at = func.to_timestamp(expires_at) if expires_at is not None else None
+        expires = func.to_timestamp(expires) if expires is not None else None
 
         # check if role exists
         result = await session.execute(statement=select(RoleTable.id).where(RoleTable.id == role_id))
@@ -275,7 +280,7 @@ class IdentityAccessManager:
                     role_id=role_id,
                     organization_id=organization_id,
                     budget=budget,
-                    expires_at=expires_at,
+                    expires=expires,
                     priority=priority,
                 )
                 .returning(UserTable.id)
@@ -313,7 +318,7 @@ class IdentityAccessManager:
         role_id: int | None = None,
         organization_id: int | None = None,
         budget: float | None = None,
-        expires_at: int | None = None,
+        expires: int | None = None,
         priority: int | None = None,
     ) -> None:
         # check if user exists
@@ -327,7 +332,7 @@ class IdentityAccessManager:
                 UserTable.name,
                 UserTable.role_id,
                 UserTable.budget,
-                UserTable.expires_at,
+                UserTable.expires,
                 UserTable.priority,
                 RoleTable.name.label("role"),
             )
@@ -348,7 +353,7 @@ class IdentityAccessManager:
         name = name if name is not None else user.name
         iss = iss if iss is not None else user.iss
         sub = sub if sub is not None else user.sub
-        expires_at = func.to_timestamp(expires_at) if expires_at is not None else None
+        expires = func.to_timestamp(expires) if expires is not None else None
         new_priority = priority if priority is not None else user.priority
 
         if role_id is not None and role_id != user.role_id:
@@ -391,7 +396,7 @@ class IdentityAccessManager:
                 role_id=role_id,
                 organization_id=organization_id,
                 budget=budget,
-                expires_at=expires_at,
+                expires=expires,
                 priority=new_priority,
             )
             .where(UserTable.id == user.id)
@@ -407,7 +412,7 @@ class IdentityAccessManager:
         organization_id: int | None = None,
         offset: int = 0,
         limit: int = 10,
-        order_by: Literal["id", "email", "created_at", "updated_at"] = "id",
+        order_by: Literal["id", "email", "created", "updated"] = "id",
         order_direction: Literal["asc", "desc"] = "asc",
     ) -> list[User]:
         statement = (
@@ -418,9 +423,9 @@ class IdentityAccessManager:
                 UserTable.role_id.label("role"),
                 UserTable.organization_id.label("organization"),
                 UserTable.budget,
-                cast(func.extract("epoch", UserTable.expires_at), Integer).label("expires_at"),
-                cast(func.extract("epoch", UserTable.created_at), Integer).label("created_at"),
-                cast(func.extract("epoch", UserTable.updated_at), Integer).label("updated_at"),
+                cast(func.extract("epoch", UserTable.expires), Integer).label("expires"),
+                cast(func.extract("epoch", UserTable.created), Integer).label("created"),
+                cast(func.extract("epoch", UserTable.updated), Integer).label("updated"),
                 UserTable.email,
                 UserTable.sub,
                 UserTable.priority,
@@ -460,7 +465,11 @@ class IdentityAccessManager:
         except NoResultFound:
             raise OrganizationNotFoundException()
 
-        await session.execute(statement=delete(table=OrganizationTable).where(OrganizationTable.id == organization_id))
+        try:
+            await session.execute(statement=delete(table=OrganizationTable).where(OrganizationTable.id == organization_id))
+        except IntegrityError:
+            raise DeleteOrganizationWithUsersException()
+
         await session.commit()
 
     async def update_organization(self, session: AsyncSession, organization_id: int, name: str | None = None) -> None:
@@ -480,15 +489,15 @@ class IdentityAccessManager:
         organization_id: int | None = None,
         offset: int = 0,
         limit: int = 10,
-        order_by: Literal["id", "name", "created_at", "updated_at"] = "id",
+        order_by: Literal["id", "name", "created", "updated"] = "id",
         order_direction: Literal["asc", "desc"] = "asc",
     ) -> list[Organization]:
         statement = (
             select(
                 OrganizationTable.id,
                 OrganizationTable.name,
-                cast(func.extract("epoch", OrganizationTable.created_at), Integer).label("created_at"),
-                cast(func.extract("epoch", OrganizationTable.updated_at), Integer).label("updated_at"),
+                cast(func.extract("epoch", OrganizationTable.created), Integer).label("created"),
+                cast(func.extract("epoch", OrganizationTable.updated), Integer).label("updated"),
             )
             .offset(offset=offset)
             .limit(limit=limit)
@@ -506,11 +515,11 @@ class IdentityAccessManager:
 
         return organizations
 
-    async def create_token(self, session: AsyncSession, user_id: int, name: str, expires_at: int | None = None) -> tuple[int, str]:
+    async def create_token(self, session: AsyncSession, user_id: int, name: str, expires: int | None = None) -> tuple[int, str]:
         if self.key_max_expiration_days:
-            if expires_at is None:
-                expires_at = int(dt.datetime.now(tz=dt.UTC).timestamp()) + self.key_max_expiration_days * 86400
-            elif expires_at > int(dt.datetime.now(tz=dt.UTC).timestamp()) + self.key_max_expiration_days * 86400:
+            if expires is None:
+                expires = int(dt.datetime.now(tz=dt.UTC).timestamp()) + self.key_max_expiration_days * 86400
+            elif expires > int(dt.datetime.now(tz=dt.UTC).timestamp()) + self.key_max_expiration_days * 86400:
                 raise InvalidTokenExpirationException(detail=f"Token expiration timestamp cannot be greater than {self.key_max_expiration_days} days from now.")  # fmt: off
 
         result = await session.execute(statement=select(UserTable).where(UserTable.id == user_id))
@@ -525,12 +534,12 @@ class IdentityAccessManager:
         await session.commit()
 
         # generate the token
-        token = self._encode_token(user_id=user.id, token_id=token_id, expires_at=expires_at)
+        token = self._encode_token(user_id=user.id, token_id=token_id, expires=expires)
 
         # update the token
-        expires_at = func.to_timestamp(expires_at) if expires_at is not None else None
+        expires = func.to_timestamp(expires) if expires is not None else None
         await session.execute(
-            statement=update(table=TokenTable).values(token=f"{token[:8]}...{token[-8:]}", expires_at=expires_at).where(TokenTable.id == token_id)
+            statement=update(table=TokenTable).values(token=f"{token[:8]}...{token[-8:]}", expires=expires).where(TokenTable.id == token_id)
         )
         await session.commit()
 
@@ -549,32 +558,18 @@ class IdentityAccessManager:
         Returns:
             Tuple containing the new token_id and token
         """
-        # Get the old token_id for tokens with the same name and user_id
-        old_token_result = await session.execute(statement=select(TokenTable.id).where(TokenTable.user_id == user_id, TokenTable.name == name))
-        old_token_ids = [row[0] for row in old_token_result.all()]
+        # delete old for tokens with the same name and user_id
+        query = delete(TokenTable).where(TokenTable.user_id == user_id, TokenTable.name == name)
+        await session.execute(query)
+        await session.commit()
 
         if self.playground_session_duration is None:
-            expires_at = None
+            expires = None
         else:
-            expires_at = int((datetime.now() + timedelta(seconds=self.playground_session_duration)).timestamp())
+            expires = int((datetime.now() + timedelta(seconds=self.playground_session_duration)).timestamp())
 
         # Create a new token
-        token_id, token = await self.create_token(session, user_id, name, expires_at=expires_at)
-
-        # Update Usage table to point to the new token_id for old token references
-        if old_token_ids:
-            await session.execute(statement=update(UsageTable).values(token_id=token_id).where(UsageTable.token_id.in_(old_token_ids)))
-
-        # Delete all old tokens with the same name and user_id (excluding the newly created one)
-        if old_token_ids:
-            await session.execute(
-                statement=delete(TokenTable).where(
-                    TokenTable.user_id == user_id,
-                    TokenTable.name == name,
-                    TokenTable.id.in_(old_token_ids),
-                )
-            )
-            await session.commit()
+        token_id, token = await self.create_token(session, user_id, name, expires=expires)
 
         return token_id, token
 
@@ -612,7 +607,7 @@ class IdentityAccessManager:
         exclude_expired: bool = False,
         offset: int = 0,
         limit: int = 10,
-        order_by: Literal["id", "name", "created_at"] = "id",
+        order_by: Literal["id", "name", "created"] = "id",
         order_direction: Literal["asc", "desc"] = "asc",
     ) -> list[Token]:
         statement = (
@@ -621,8 +616,8 @@ class IdentityAccessManager:
                 TokenTable.name,
                 TokenTable.token,
                 TokenTable.user_id.label("user"),
-                cast(func.extract("epoch", TokenTable.expires_at), Integer).label("expires_at"),
-                cast(func.extract("epoch", TokenTable.created_at), Integer).label("created_at"),
+                cast(func.extract("epoch", TokenTable.expires), Integer).label("expires"),
+                cast(func.extract("epoch", TokenTable.created), Integer).label("created"),
             )
             .offset(offset=offset)
             .limit(limit=limit)
@@ -636,7 +631,7 @@ class IdentityAccessManager:
             statement = statement.where(TokenTable.id == token_id)
 
         if exclude_expired is not None:
-            statement = statement.where(or_(TokenTable.expires_at.is_(None), TokenTable.expires_at >= func.now()))
+            statement = statement.where(or_(TokenTable.expires.is_(None), TokenTable.expires >= func.now()))
 
         result = await session.execute(statement=statement)
         tokens = [Token(**row._mapping) for row in result.all()]
@@ -663,14 +658,14 @@ class IdentityAccessManager:
 
     async def invalidate_token(self, session: AsyncSession, token_id: int, user_id: int) -> None:
         """
-        Invalidate a token by setting its expires_at to the current timestamp
+        Invalidate a token by setting its expires to the current timestamp
 
         Args:
             session: Database session
             token_id: ID of the token to invalidate
             user_id: ID of the user who owns the token (for security)
         """
-        await session.execute(update(TokenTable).where(TokenTable.id == token_id).where(TokenTable.user_id == user_id).values(expires_at=func.now()))
+        await session.execute(update(TokenTable).where(TokenTable.id == token_id).where(TokenTable.user_id == user_id).values(expires=func.now()))
         await session.commit()
 
     async def get_user(
@@ -700,46 +695,41 @@ class IdentityAccessManager:
 
     async def get_user_info(self, session: AsyncSession, user_id: int | None = None, email: str | None = None) -> UserInfo:
         assert user_id is not None or email is not None, "user_id or email is required"
-        if user_id == 0:
-            return UserInfo(
+
+        if user_id == 0:  # master user
+            routers = await global_context.model_registry.get_routers(router_id=None, name=None, session=session)
+            user = UserInfo(
                 id=0,
                 email="master",
                 name="master",
                 organization=0,
                 budget=None,
                 permissions=[permission for permission in PermissionType],
-                limits=[
-                    Limit(model=model, type=type, value=None)
-                    for model in (global_context.model_registry.models if global_context.model_registry else [])
-                    for type in LimitType
-                ],
-                expires_at=None,
-                created_at=0,
-                updated_at=0,
-                priority=settings.celery_task_max_priority,
+                limits=[Limit(router=router.id, type=type, value=None) for router in routers for type in LimitType],
             )
-        users = await self.get_users(session=session, user_id=user_id, email=email)
-        user = users[0]
+        else:
+            users = await self.get_users(session=session, user_id=user_id, email=email)
+            user = users[0]
 
-        roles = await self.get_roles(session, role_id=user.role)
-        role = roles[0]
+            roles = await self.get_roles(session, role_id=user.role)
+            role = roles[0]
 
-        # user cannot see limits on models that are not accessible by the role
-        limits = [limit for limit in role.limits if limit.value is None or limit.value > 0]
+            # user cannot see limits on models that are not accessible by the role
+            limits = [limit for limit in role.limits if limit.value is None or limit.value > 0]
 
-        user = UserInfo(
-            id=user.id,
-            email=user.email,
-            name=user.name,
-            organization=user.organization,
-            budget=user.budget,
-            permissions=role.permissions,
-            limits=limits,
-            expires_at=user.expires_at,
-            created_at=user.created_at,
-            updated_at=user.updated_at,
-            priority=user.priority,
-        )
+            user = UserInfo(
+                id=user.id,
+                email=user.email,
+                name=user.name,
+                organization=user.organization,
+                budget=user.budget,
+                permissions=role.permissions,
+                limits=limits,
+                expires=user.expires,
+                created=user.created,
+                updated=user.updated,
+                priority=user.priority,
+            )
 
         return user
 

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.helpers._accesscontroller import AccessController
 from api.schemas.admin.roles import PermissionType
-from api.schemas.admin.users import UserRequest, Users, UsersResponse, UserUpdateRequest
+from api.schemas.admin.users import CreateUser, Users, UsersResponse, UserUpdateRequest
 from api.sql.session import get_db_session
 from api.utils.context import global_context
 from api.utils.variables import ENDPOINT__ADMIN_USERS, ROUTER__ADMIN
@@ -22,7 +22,7 @@ router = APIRouter(prefix="/v1", tags=[ROUTER__ADMIN.title()])
 )
 async def create_user(
     request: Request,
-    body: UserRequest = Body(description="The user creation request."),
+    body: CreateUser = Body(description="The user creation request."),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
     """
@@ -37,7 +37,7 @@ async def create_user(
         role_id=body.role,
         organization_id=body.organization,
         budget=body.budget,
-        expires_at=body.expires_at,
+        expires=body.expires,
         priority=body.priority if body.priority is not None else 0,
     )
 
@@ -86,7 +86,7 @@ async def update_user(
         role_id=body.role,
         organization_id=body.organization,
         budget=body.budget,
-        expires_at=body.expires_at,
+        expires=body.expires,
         priority=body.priority,
     )
 
@@ -121,7 +121,7 @@ async def get_users(
     organization: int | None = Query(default=None, description="The ID of the organization to filter the users by."),
     offset: int = Query(default=0, ge=0, description="The offset of the users to get."),
     limit: int = Query(default=10, ge=1, le=100, description="The limit of the users to get."),
-    order_by: Literal["id", "name", "created_at", "updated_at"] = Query(default="id", description="The field to order the users by."),
+    order_by: Literal["id", "name", "created", "updated"] = Query(default="id", description="The field to order the users by."),
     order_direction: Literal["asc", "desc"] = Query(default="asc", description="The direction to order the users by."),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:

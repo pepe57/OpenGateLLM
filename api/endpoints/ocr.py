@@ -1,24 +1,40 @@
 import base64
+from contextvars import ContextVar
 
-from fastapi import APIRouter, HTTPException, Request, Security, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Security, UploadFile
 from fastapi.responses import JSONResponse
 import pymupdf
+from redis.asyncio import Redis as AsyncRedis
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.helpers._accesscontroller import AccessController
+from api.helpers.models import ModelRegistry
+from api.schemas.core.context import RequestContext
 from api.schemas.core.documents import FileType
 from api.schemas.ocr import DPIForm, ModelForm, PromptForm
 from api.schemas.parse import FileForm, ParsedDocument, ParsedDocumentMetadata, ParsedDocumentPage
 from api.schemas.usage import Usage
-from api.services.model_invocation import invoke_model_request
+from api.sql.session import get_db_session
 from api.utils.context import global_context
-from api.utils.exceptions import FileSizeLimitExceededException, TaskFailedException
+from api.utils.dependencies import get_model_registry, get_redis_client, get_request_context
+from api.utils.exceptions import FileSizeLimitExceededException
 from api.utils.variables import ENDPOINT__OCR, ROUTER__OCR
 
 router = APIRouter(prefix="/v1", tags=[ROUTER__OCR.upper()])
 
 
 @router.post(path=ENDPOINT__OCR, dependencies=[Security(dependency=AccessController())], status_code=200, response_model=ParsedDocument)
-async def ocr(request: Request, file: UploadFile = FileForm, model: str = ModelForm, dpi: int = DPIForm, prompt: str = PromptForm) -> JSONResponse:
+async def ocr(
+    request: Request,
+    file: UploadFile = FileForm,
+    model: str = ModelForm,
+    dpi: int = DPIForm,
+    prompt: str = PromptForm,
+    model_registry: ModelRegistry = Depends(get_model_registry),
+    redis_client: AsyncRedis = Depends(get_redis_client),
+    session: AsyncSession = Depends(get_db_session),
+    request_context: ContextVar[RequestContext] = Depends(get_request_context),
+) -> JSONResponse:
     """
     Extracts text from PDF files using OCR.
     """
@@ -42,21 +58,23 @@ async def ocr(request: Request, file: UploadFile = FileForm, model: str = ModelF
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(img_byte_arr).decode('utf-8')}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(img_byte_arr).decode("utf-8")}"}},
                     ],
                 }
             ],
             "n": 1,
             "stream": False,
         }
-        user_info = getattr(request.state, "user", None)
-        user_priority = getattr(user_info, "priority", 0) if user_info else 0
-        try:
-            client = await invoke_model_request(model_name=model, endpoint=ENDPOINT__OCR, user_priority=user_priority)
-        except TaskFailedException as e:
-            return JSONResponse(content=e.detail, status_code=e.status_code)
-        client.endpoint = ENDPOINT__OCR
-        response = await client.forward_request(method="POST", json=payload)
+
+        model_provider = await model_registry.get_model_provider(
+            model=model,
+            endpoint=ENDPOINT__OCR,
+            session=session,
+            redis_client=redis_client,
+            request_context=request_context,
+        )
+
+        response = await model_provider.forward_request(method="POST", json=payload, endpoint=ENDPOINT__OCR, redis_client=redis_client)
         status = response.status_code
         body_json = response.json()
         if status // 100 != 2:

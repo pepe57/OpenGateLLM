@@ -16,13 +16,10 @@ class UserInfo(BaseModel):
     budget: float | None = Field(default=None, description="The user budget. If None, the user has unlimited budget.")
     permissions: list[PermissionType] = Field(description="The user permissions.")
     limits: list[Limit] = Field(description="The user rate limits.")
-    expires_at: int | None = Field(default=None, description="The user expiration timestamp. If None, the user will never expire.")
-    created_at: int = Field(description="The user creation timestamp.")
-    updated_at: int = Field(description="The user update timestamp.")
-    priority: int = Field(
-        default=0,
-        description="The user priority (higher = higher priority). This value influences scheduling/queue priority for non-streaming model invocations.",
-    )
+    expires: int | None = Field(default=None, description="The user expiration timestamp. If None, the user will never expire.")
+    priority: int = Field(default=0,description="The user priority (higher = higher priority). This value influences scheduling/queue priority for non-streaming model invocations.")  # fmt: off
+    created: int = Field(description="The user creation timestamp.")
+    updated: int = Field(description="The user update timestamp.")
 
 
 class UpdateUserRequest(BaseModel):
@@ -39,15 +36,15 @@ class CreateKeyResponse(BaseModel):
 
 class CreateKey(BaseModel):
     name: Annotated[str, constr(strip_whitespace=True, min_length=1)]
-    expires_at: int | None = Field(None, description="Timestamp in seconds")
+    expires: int | None = Field(None, description="Timestamp in seconds")
 
-    @field_validator("expires_at", mode="before")
-    def must_be_future(cls, expires_at):
-        if isinstance(expires_at, int):
-            if expires_at <= int(dt.datetime.now(tz=dt.UTC).timestamp()):
+    @field_validator("expires", mode="before")
+    def must_be_future(cls, expires):
+        if isinstance(expires, int):
+            if expires <= int(dt.datetime.now(tz=dt.UTC).timestamp()):
                 raise ValueError("Wrong timestamp, must be in the future.")
 
-        return expires_at
+        return expires
 
 
 class Key(BaseModel):
@@ -55,8 +52,8 @@ class Key(BaseModel):
     id: int
     name: str
     token: str
-    expires_at: int | None = None
-    created_at: int
+    expires: int | None = None
+    created: int
 
 
 class Keys(BaseModel):

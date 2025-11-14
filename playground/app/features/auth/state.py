@@ -21,8 +21,8 @@ class AuthState(rx.State):
     user_organization: int | None = None
     user_budget: float | None = None
     user_priority: int | None = None
-    user_created_at: int | None = None
-    user_updated_at: int | None = None
+    user_created: int | None = None
+    user_updated: int | None = None
     user_permissions: list[str] = []
     user_limits: list[dict] = []
 
@@ -51,7 +51,7 @@ class AuthState(rx.State):
         try:
             async with httpx.AsyncClient() as client:
                 # Login to get API key
-                response = await client.post(f"{self.opengatellm_url}/v1/auth/login", json={"email": email, "password": password}, timeout=10.0)
+                response = await client.post(f"{self.opengatellm_url}/v1/auth/login", json={"email": email, "password": password}, timeout=60.0)
                 if response.status_code != 200:
                     error_detail = response.json().get("detail", "Login failed")
                     yield rx.toast.error(error_detail, position="bottom-right")
@@ -64,7 +64,7 @@ class AuthState(rx.State):
                 api_key_id = login_data.get("id")
 
                 # Get user info
-                response = await client.get(f"{self.opengatellm_url}/v1/me/info", headers={"Authorization": f"Bearer {api_key}"}, timeout=10.0)
+                response = await client.get(f"{self.opengatellm_url}/v1/me/info", headers={"Authorization": f"Bearer {api_key}"}, timeout=60.0)
 
                 if response.status_code != 200:
                     yield rx.toast.error("Failed to fetch user info", position="bottom-right")
@@ -84,8 +84,8 @@ class AuthState(rx.State):
                 self.user_organization = user_data.get("organization")
                 self.user_budget = user_data.get("budget")
                 self.user_priority = user_data.get("priority", 0)
-                self.user_created_at = user_data.get("created_at")
-                self.user_updated_at = user_data.get("updated_at")
+                self.user_created = user_data.get("created")
+                self.user_updated = user_data.get("updated")
                 self.user_permissions = user_data.get("permissions", [])
                 self.user_limits = user_data.get("limits", [])
 
@@ -129,7 +129,7 @@ class AuthState(rx.State):
         self.user_organization = None
         self.user_budget = None
         self.user_priority = None
-        self.user_created_at = None
-        self.user_updated_at = None
+        self.user_created = None
+        self.user_updated = None
         self.user_permissions = []
         self.user_limits = []
