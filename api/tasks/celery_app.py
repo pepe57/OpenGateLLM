@@ -6,6 +6,7 @@ from kombu import Queue
 from redis import ConnectionPool, Redis
 
 from api.utils.configuration import configuration
+from api.utils.variables import PREFIX__CELERY_QUEUE_ROUTING
 
 settings = configuration.settings
 logger = logging.getLogger(__name__)
@@ -45,7 +46,6 @@ celery_app.conf.update(
     task_eager_propagates=configuration.settings.celery_task_eager_propagates,
     broker_url=configuration.settings.celery_broker_url,
     result_backend=configuration.settings.celery_result_backend,
-    task_soft_time_limit=configuration.settings.celery_task_soft_time_limit,
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     task_serializer="json",
@@ -61,14 +61,14 @@ if configuration.settings.celery_broker_url and configuration.settings.celery_br
     # Use a default catch-all queue with priority enabled; model-specific queues reuse same arguments.
     celery_app.conf.task_queues = (
         Queue(
-            f"{configuration.settings.celery_default_queue_prefix}.default",
-            routing_key=f"{configuration.settings.celery_default_queue_prefix}.default",
+            name=f"{PREFIX__CELERY_QUEUE_ROUTING}.default",
+            routing_key=f"{PREFIX__CELERY_QUEUE_ROUTING}.default",
             queue_arguments={"x-max-priority": configuration.settings.celery_task_max_priority},
         ),
     )
-    celery_app.conf.task_default_queue = f"{configuration.settings.celery_default_queue_prefix}.default"
+    celery_app.conf.task_default_queue = f"{PREFIX__CELERY_QUEUE_ROUTING}.default"
     celery_app.conf.task_default_exchange = ""
-    celery_app.conf.task_default_routing_key = f"{configuration.settings.celery_default_queue_prefix}.default"
+    celery_app.conf.task_default_routing_key = f"{PREFIX__CELERY_QUEUE_ROUTING}.default"
     celery_app.conf.task_queue_max_priority = configuration.settings.celery_task_max_priority
 
 
