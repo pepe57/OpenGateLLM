@@ -2,14 +2,16 @@
 
 import reflex as rx
 
-from app.features.chat.components import chat, chat_input_bar, chat_params_sidebar
-from app.features.chat.components.chat_header import chat_header
+from app.features.chat.components.headers import chat_header
+from app.features.chat.components.input_bars import chat_input_bar
+from app.features.chat.components.sidebars import chat_params_sidebar
+from app.features.chat.components.windows import chat_window
 
 
 def chat_page_content() -> rx.Component:
     return rx.vstack(
         chat_header(),
-        chat(),
+        chat_window(),
         chat_input_bar(),
         chat_params_sidebar(),
         background_color=rx.color("mauve", 1),

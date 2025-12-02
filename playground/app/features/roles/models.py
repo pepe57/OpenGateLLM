@@ -1,33 +1,16 @@
-from pydantic import BaseModel
+from app.shared.models.entities import Entity
 
 
-class Limit(BaseModel):
-    """Limit model."""
-
-    model: str
-    type: str  # "tpm", "tpd", "rpm", "rpd"
-    value: int | None
-
-
-class Role(BaseModel):
+class Role(Entity):
     """Role model."""
 
-    id: int
-    name: str
-    permissions: list[str]
-    limits: list[Limit]
-    users: int
-    created: int
-    updated: int
-
-
-class FormattedRole(BaseModel):
-    """Formatted role for display."""
-
-    id: int
-    name: str
-    permissions: list[str]
-    limits: list[Limit]
-    users: int
-    created: str
-    updated: str
+    id: int | None = None
+    name: str | None = None
+    permissions_admin: bool | None = None
+    permissions_create_public_collection: bool | None = None
+    permissions_read_metric: bool | None = None
+    permissions_provide_models: bool | None = None
+    limits: list[dict] | None = None
+    users: int | None = None
+    created: str | None = None
+    updated: str | None = None

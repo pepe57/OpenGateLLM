@@ -14,16 +14,18 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install ".[playground]"
 
 ARG CONFIG_FILE=config.example.yml \
-    FAVICON=./playground/assets/favicon.ico \
+    LOGO=./playground/assets/logo.svg \
+    FAVICON=./playground/assets/logo.svg \
     REFLEX_BACKEND_URL=http://localhost:8501 \
     REFLEX_FRONTEND_URL=http://localhost:8501 \
     REFLEX_FRONTEND_PATH=''
 
 COPY $CONFIG_FILE ./config.yml
 COPY ./playground/ .
-COPY $FAVICON ./assets/favicon.ico
+COPY $FAVICON ./assets/favicon.svg
+COPY $LOGO ./assets/logo.svg
 
-ENV CONFIG_FILE=config.yml \
+ENV CONFIG_FILE=config.yml 
     REFLEX_BACKEND_URL=$REFLEX_BACKEND_URL \
     REFLEX_FRONTEND_URL=$REFLEX_FRONTEND_URL \
     REFLEX_FRONTEND_PATH=$REFLEX_FRONTEND_PATH

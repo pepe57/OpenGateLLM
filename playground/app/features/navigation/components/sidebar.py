@@ -35,12 +35,17 @@ def nav_item(label: str, icon: str, page: str) -> rx.Component:
     )
 
 
-def sidebar() -> rx.Component:
+def navigation_sidebar() -> rx.Component:
     """Left navigation sidebar."""
     return rx.box(
         rx.vstack(
             # Header
             rx.hstack(
+                rx.image(
+                    src="/logo.svg",
+                    width="32px",
+                    height="32px",
+                ),
                 rx.heading(
                     configuration.settings.app_title,
                     size="5",
@@ -49,6 +54,7 @@ def sidebar() -> rx.Component:
                 width="100%",
                 padding="1em",
                 border_bottom=f"1px solid {rx.color("mauve", 3)}",
+                align_items="center",
             ),
             # Navigation items
             rx.vstack(
@@ -66,6 +72,8 @@ def sidebar() -> rx.Component:
                     AuthState.is_admin,
                     rx.box(
                         rx.divider(),
+                        nav_item("Routers", "network", "/routers"),
+                        nav_item("Providers", "container", "/providers"),
                         nav_item("Roles", "shield", "/roles"),
                         nav_item("Organizations", "building", "/organizations"),
                         nav_item("Users", "users", "/users"),

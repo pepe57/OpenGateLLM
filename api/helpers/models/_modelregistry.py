@@ -118,12 +118,15 @@ class ModelRegistry:
                     load_balancing_strategy=model.load_balancing_strategy,
                     cost_prompt_tokens=model.cost_prompt_tokens,
                     cost_completion_tokens=model.cost_completion_tokens,
-                    user_id=None,
+                    user_id=0,  # setup as master user
                     postgres_session=postgres_session,
                 )
                 logger.info(f"Router {model.name} are created (id: {router_id})")
             except RouterAlreadyExistsException:
                 logger.warning(f"Router {model.name} already exists, skipping.")
+            except RouterAliasAlreadyExistsException:
+                logger.warning(f"Router {model.name} aliases already exists, skipping.")
+                continue
             except Exception as e:
                 await postgres_session.rollback()
                 logger.error(f"Error creating router {model.name}: {e}")
@@ -136,7 +139,7 @@ class ModelRegistry:
                 try:
                     provider_id = await self.create_provider(
                         router_id=router.id,
-                        user_id=None,
+                        user_id=0,  # setup as master user
                         type=provider.type,
                         url=provider.url,
                         key=provider.key,
@@ -192,6 +195,7 @@ class ModelRegistry:
         """
 
         # Create the router in database
+        user_id = None if user_id == 0 else user_id  # 0 corresponds to master user ID
         try:
             query = (
                 insert(RouterTable)
@@ -487,6 +491,7 @@ class ModelRegistry:
 
         # Create provider
         try:
+            user_id = None if user_id == 0 else user_id  # 0 corresponds to master user ID
             qos_metric = qos_metric.value if qos_metric is not None else None
             query = (
                 insert(ProviderTable)
@@ -579,7 +584,10 @@ class ModelRegistry:
             ProviderTable.qos_limit,
             cast(func.extract("epoch", ProviderTable.created), Integer).label("created"),
             cast(func.extract("epoch", ProviderTable.updated), Integer).label("updated"),
-        ).where(ProviderTable.router_id == router_id)
+        )
+
+        if router_id is not None:
+            query = query.where(ProviderTable.router_id == router_id)
 
         if provider_id is not None:
             query = query.where(ProviderTable.id == provider_id)
