@@ -41,6 +41,7 @@ from api.utils.variables import (
     ENDPOINT__CHAT_COMPLETIONS,
     ENDPOINT__EMBEDDINGS,
     ENDPOINT__OCR,
+    ENDPOINT__OCR_BETA,
     ENDPOINT__RERANK,
     PREFIX__CELERY_QUEUE_ROUTING,
 )
@@ -77,12 +78,16 @@ class ModelRegistry:
             ProviderType.ALBERT.value,
             ProviderType.TEI.value,
         ],
+        ModelType.IMAGE_TO_TEXT: [
+            ProviderType.MISTRAL.value,
+        ],
     }
     ENDPOINT_MODEL_TYPE_TABLE = {
         ENDPOINT__AUDIO_TRANSCRIPTIONS: [ModelType.AUTOMATIC_SPEECH_RECOGNITION],
         ENDPOINT__CHAT_COMPLETIONS: [ModelType.TEXT_GENERATION, ModelType.IMAGE_TEXT_TO_TEXT],
         ENDPOINT__EMBEDDINGS: [ModelType.TEXT_EMBEDDINGS_INFERENCE],
-        ENDPOINT__OCR: [ModelType.IMAGE_TEXT_TO_TEXT],
+        ENDPOINT__OCR: [ModelType.IMAGE_TO_TEXT],
+        ENDPOINT__OCR_BETA: [ModelType.IMAGE_TEXT_TO_TEXT],
         ENDPOINT__RERANK: [ModelType.TEXT_CLASSIFICATION],
     }
 
@@ -545,15 +550,19 @@ class ModelRegistry:
             postgres_session(AsyncSession): Database postgres_session
         """
         # Check if provider exists
+        query = select(ProviderTable).where(ProviderTable.id == provider_id)
+        if user_id != 0:
+            query = query.where(ProviderTable.user_id == user_id)
         try:
-            query = select(ProviderTable).where(ProviderTable.id == provider_id).where(ProviderTable.user_id == user_id)
             result = await postgres_session.execute(query)
             result.scalar_one()
         except NoResultFound:
             raise ProviderNotFoundException()
 
         # Delete provider
-        query = delete(ProviderTable).where(ProviderTable.id == provider_id).where(ProviderTable.user_id == user_id)
+        query = delete(ProviderTable).where(ProviderTable.id == provider_id)
+        if user_id != 0:
+            query = query.where(ProviderTable.user_id == user_id)
         await postgres_session.execute(query)
         await postgres_session.commit()
 
