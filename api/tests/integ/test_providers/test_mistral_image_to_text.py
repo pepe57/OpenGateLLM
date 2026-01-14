@@ -20,7 +20,7 @@ from api.utils.variables import ENDPOINT__OCR
 
 
 @pytest.fixture(scope="module")
-def setup_mistral_image_to_text_model_and_user(client: TestClient):
+def setup_mistral_image_to_text(client: TestClient):
     test_id = generate_test_id(prefix="TestUsage")
     process = run_openmockllm(test_id=test_id, backend="mistral")
     try:
@@ -44,12 +44,12 @@ def setup_mistral_image_to_text_model_and_user(client: TestClient):
         kill_openmockllm(process=process)
 
 
-@pytest.mark.usefixtures("client", "setup_mistral_image_to_text_model_and_user")
-class TestMistral:
-    def test_mistral_image_to_text_successful(self, client: TestClient, setup_mistral_image_to_text_model_and_user):
+@pytest.mark.usefixtures("client", "setup_mistral_image_to_text")
+class TestMistralImageToText:
+    def test_mistral_ocr_successful(self, client: TestClient, setup_mistral_image_to_text: tuple[str, str]):
         """Test successful OCR processing of a PDF file."""
 
-        key, model_name = setup_mistral_image_to_text_model_and_user
+        key, model_name = setup_mistral_image_to_text
 
         response = client.post_without_permissions(
             f"/v1{ENDPOINT__OCR}",

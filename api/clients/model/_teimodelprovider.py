@@ -5,6 +5,8 @@ from urllib.parse import urljoin
 
 import httpx
 
+from api.schemas.admin.providers import ProviderType
+from api.schemas.rerank import CreateRerank, Reranks
 from api.utils.variables import (
     ENDPOINT__AUDIO_TRANSCRIPTIONS,
     ENDPOINT__CHAT_COMPLETIONS,
@@ -66,7 +68,6 @@ class TeiModelProvider(BaseModelProvider):
         data = response.json()
         assert self.name == data["model_id"], f"Model not found ({self.name})."
         max_context_length = data.get("max_input_length")
-
         return max_context_length
 
     def _format_request(
@@ -96,7 +97,9 @@ class TeiModelProvider(BaseModelProvider):
             data["model"] = self.name
 
         if endpoint.endswith(ENDPOINT__RERANK):
-            json = {"query": json["prompt"], "texts": json["input"]}
+            top_n = json.get("top_n")
+            json = CreateRerank(**json).format(provider=ProviderType.TEI).model_dump()
+            json["top_n"] = top_n  # @TODO: remove after request context feature is implemented
 
         return url, json, files, data
 
@@ -125,11 +128,14 @@ class TeiModelProvider(BaseModelProvider):
 
         content_type = response.headers.get("Content-Type", "")
         if content_type == "application/json":
-            data = response.json()
-            if isinstance(data, list):  # for TEI reranking
-                data = {"data": data}
+            raw_response = response.json()
+            if endpoint == ENDPOINT__RERANK:
+                data = Reranks.build_from(provider=ProviderType.TEI, response=raw_response, top_n=json.get("top_n")).model_dump()
+            else:
+                data = raw_response
             data.update(self._get_additional_data(json=json, data=data, stream=False, endpoint=endpoint, request_latency=request_latency))
             data.update(additional_data)
+
             response = httpx.Response(status_code=response.status_code, content=dumps(data))
 
         return response
