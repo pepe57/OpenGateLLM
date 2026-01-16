@@ -4,7 +4,7 @@ from pydantic import Field, constr, model_validator
 
 from api.schemas import BaseModel
 from api.schemas.admin.providers import ProviderType
-from api.schemas.core.models import TEICreateRerank, TEIReranks
+from api.schemas.core.models import RequestContent, TEICreateRerank
 from api.schemas.usage import Usage
 
 
@@ -29,18 +29,22 @@ class CreateRerank(BaseModel):
 
         return self
 
-    def format(self, provider: ProviderType):
-        match provider:
+    @staticmethod
+    def format_request(provider_type: ProviderType, request_content: RequestContent):
+        match provider_type:
             case ProviderType.ALBERT:
-                return self
+                return request_content
 
             case ProviderType.TEI:
-                query = self.query if self.query else self.prompt
-                texts = self.input if self.input else self.documents
-                return TEICreateRerank(query=query, texts=texts)
+                request_content.additional_data["top_n"] = request_content.json.get("top_n")
+                query = request_content.json.get("query") or request_content.json.get("prompt")
+                texts = request_content.json.get("input") or request_content.json.get("documents")
+                request_content.json = TEICreateRerank(query=query, texts=texts).model_dump()
+
+                return request_content
 
             case _:
-                raise NotImplementedError(f"Provider {provider} not implemented")
+                raise NotImplementedError(f"Provider {provider_type} not implemented")
 
 
 class Rerank(BaseModel):
@@ -56,34 +60,29 @@ class RerankResult(BaseModel):
 
 class Reranks(BaseModel):
     object: Literal["list"] = "list"
-    id: str = Field(default=..., description="A unique identifier for the reranking.")
+    id: str = Field(default=..., description="A unique identifier for the request.")
     data: list[Rerank] = Field(default=..., description="The list of reranked texts.", deprecated=True)
     results: list[RerankResult] = Field(default=..., description="The list of reranked texts.")
     model: str = Field(default=..., description="The model used to generate the reranking.")
     usage: Usage = Field(default_factory=Usage, description="Usage information for the request.")
 
     @classmethod
-    def build_from(cls, provider: ProviderType, response: dict, top_n: int | None):
-        match provider:
+    def build_from(cls, provider_type: ProviderType, request_content: RequestContent, response_data: dict):
+        match provider_type:
+            case ProviderType.ALBERT:
+                response_data.update(request_content.additional_data)
+                return cls(**response_data)
+
             case ProviderType.TEI:
-                try:
-                    response = TEIReranks(root=response)
-                except Exception as e:
-                    raise ValueError(f"Invalid response format: {e}")
                 data = []
                 results = []
-                if top_n is not None:
-                    response.root = sorted(response.root, key=lambda x: x.score, reverse=True)[:top_n]
-                for rank in response.root:
-                    data.append(Rerank(index=rank.index, score=rank.score))
-                    results.append(RerankResult(relevance_score=rank.score, index=rank.index))
-                return cls(id="", data=data, results=results, model="")
-
-            case ProviderType.ALBERT:
-                try:
-                    return cls(**response)
-                except Exception as e:
-                    raise ValueError(f"Invalid response format: {e}")
+                if request_content.additional_data["top_n"] is not None:
+                    response_data = sorted(response_data, key=lambda x: x["score"], reverse=True)[: request_content.additional_data.get("top_n")]
+                    request_content.additional_data.pop("top_n")
+                for rank in response_data:
+                    data.append(Rerank(index=rank["index"], score=rank["score"]))
+                    results.append(RerankResult(relevance_score=rank["score"], index=rank["index"]))
+                return cls(data=data, results=results, **request_content.additional_data)
 
             case _:
-                raise NotImplementedError(f"Provider {provider} not implemented")
+                raise NotImplementedError(f"Provider {provider_type} not implemented")

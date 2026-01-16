@@ -1,11 +1,9 @@
-import base64
-from json import dumps
 import logging
-from typing import Any
 from urllib.parse import urljoin
 
 import httpx
 
+from api.schemas.admin.providers import ProviderType
 from api.utils.variables import (
     ENDPOINT__AUDIO_TRANSCRIPTIONS,
     ENDPOINT__CHAT_COMPLETIONS,
@@ -52,7 +50,7 @@ class MistralModelProvider(BaseModelProvider):
             key=key,
             timeout=timeout,
         )
-        self._audio_response_format = "json"
+        self.type = ProviderType.MISTRAL
 
     async def get_max_context_length(self) -> int | None:
         url = urljoin(base=str(self.url), url=self.ENDPOINT_TABLE[ENDPOINT__MODELS].lstrip("/"))
@@ -62,123 +60,14 @@ class MistralModelProvider(BaseModelProvider):
                 response = await client.get(url=url, headers=self.headers, timeout=self.timeout)
                 response.raise_for_status()
         except Exception as e:
-            logger.error(f"Error getting max context length for {self.name}: {e}", exc_info=True)
+            logger.error(f"Error getting max context length for {self.model_name}: {e}", exc_info=True)
             raise AssertionError(f"Model is not reachable ({e}).")
 
         data = response.json()["data"]
-        models = [model for model in data if model["id"] == self.name]
-        assert len(models) == 1, f"Model not found ({self.name})."
+        models = [model for model in data if model["id"] == self.model_name]
+        assert len(models) == 1, f"Model not found ({self.model_name})."
 
         model = models[0]
         max_context_length = model.get("max_context_length")
 
         return max_context_length
-
-    def _format_request(
-        self,
-        json: dict | None = None,
-        files: dict | None = None,
-        data: dict | None = None,
-        endpoint: str | None = None,
-    ) -> tuple[str, dict[str, str] | None, dict | None, dict | None, dict | None]:
-        """
-        Converts an openAI compatible /chat/completions request to Mistral compatible /chat/completions
-        Converts an openAI compatible /audio/transcription request to a Mistral compatible /chat/completions request
-        """
-        url = urljoin(base=self.url, url=self.ENDPOINT_TABLE[endpoint].lstrip("/"))
-        if json and "model" in json:
-            json["model"] = self.name
-
-        if data and "model" in data:
-            data["model"] = self.name
-
-        if endpoint == ENDPOINT__CHAT_COMPLETIONS:
-            # see https://docs.mistral.ai/api#operation-chat_completion_v1_chat_completions_post
-            json["frequency_penalty"] = 0.0 if json["frequency_penalty"] is None else json["frequency_penalty"]
-            json["random_seed"] = json.get("random_seed", json.get("seed"))
-            json["parallel_tool_calls"] = False if json["parallel_tool_calls"] is None else json["parallel_tool_calls"]
-            json["presence_penalty"] = 0.0 if json["presence_penalty"] is None else json["presence_penalty"]
-            json["response_format"] = {"type": "text"} if json["response_format"] is None else json["response_format"]
-            if json.get("stop") is None:
-                json.pop("stop", None)
-            json["stream"] = False if json["stream"] is None else json["stream"]
-            json["top_p"] = 1.0 if json["top_p"] is None else json["top_p"]
-
-            authorized_keys = [
-                "frequency_penalty",
-                "max_tokens",
-                "messages",
-                "model",
-                "n",
-                "parallel_tool_calls",
-                "prediction",
-                "presence_penalty",
-                "prompt_mode",
-                "random_seed",
-                "response_format",
-                "safe_prompt",
-                "stop",
-                "stream",
-                "temperature",
-                "tool_choice",
-                "tools",
-                "top_p",
-            ]
-            for key in list(json.keys()):
-                if key not in authorized_keys:
-                    del json[key]
-
-        elif endpoint == ENDPOINT__AUDIO_TRANSCRIPTIONS:
-            self._audio_response_format = data.get("response_format", "json")
-
-            json = {
-                "model": self.name,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_audio",
-                                "input_audio": base64.b64encode(files["file"][1]).decode("utf-8"),
-                            },
-                            {"type": "text", "text": data.get("prompt") or f"Transcribe this audio in this language : {data.get("language", "en")}"},
-                        ],
-                    }
-                ],
-            }
-            if data.get("temperature"):
-                json["temperature"] = data["temperature"]
-            files = None
-            data = None
-
-        return url, json, files, data
-
-    def _format_response(
-        self,
-        json: dict,
-        response: httpx.Response,
-        endpoint: str,
-        additional_data: dict[str, Any] | None = None,
-        request_latency: float = 0.0,
-    ) -> httpx.Response:
-        if additional_data is None:
-            additional_data = {}
-
-        content_type = response.headers.get("Content-Type", "")
-        if content_type == "application/json":
-            data = response.json()
-            data.update(self._get_additional_data(json=json, data=data, stream=False, endpoint=endpoint, request_latency=request_latency))
-            data.update(additional_data)
-
-            if endpoint == ENDPOINT__AUDIO_TRANSCRIPTIONS:
-                transcription_text = data["choices"][0]["message"]["content"]
-
-                if self._audio_response_format == "text":
-                    response = httpx.Response(status_code=response.status_code, content=transcription_text)
-                    return response
-                else:
-                    data = {"id": data.get("id"), "text": transcription_text, "usage": data.get("usage")}
-
-            response = httpx.Response(status_code=response.status_code, content=dumps(data))
-
-        return response

@@ -12,7 +12,7 @@ from api.schemas.admin.providers import Provider, ProviderCarbonFootprintZone, P
 from api.schemas.admin.routers import Router, RouterLoadBalancingStrategy
 from api.schemas.core.configuration import Model as ModelConfiguration
 from api.schemas.core.context import RequestContext
-from api.schemas.core.metrics import Metric
+from api.schemas.core.models import Metric
 from api.schemas.me.info import UserInfo
 from api.schemas.models import Model, ModelCosts, ModelType
 from api.sql.models import Organization as OrganizationTable
@@ -496,7 +496,7 @@ class ModelRegistry:
                 vector_size = None
 
         except AssertionError as e:
-            logger.debug(f"Provider {provider.name} not reachable: {e}", exc_info=True)
+            logger.debug(f"Provider {provider.model_name} not reachable: {e}", exc_info=True)
             raise ProviderNotReachableException()
 
         # consistency check
