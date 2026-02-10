@@ -46,22 +46,17 @@ async def test_session_factory(test_engine):
 
 
 @pytest_asyncio.fixture(scope="function")
-async def db_session(test_session_factory) -> AsyncGenerator[AsyncSession, None]:
+async def db_session(test_session_factory) -> AsyncGenerator[AsyncSession]:
     """Provide a transactional scope for each test."""
     async with test_session_factory() as session:
+        all_sql_factories = factories.BaseSQLFactory.__subclasses__()
         session.expire_on_commit = False
         try:
             async with session.begin_nested():
-                factories.UserFactory._meta.sqlalchemy_session = session
-                factories.RoleFactory._meta.sqlalchemy_session = session
-                factories.TokenFactory._meta.sqlalchemy_session = session
-                factories.RouterFactory._meta.sqlalchemy_session = session
-                factories.RouterAliasFactory._meta.sqlalchemy_session = session
-                factories.ProviderFactory._meta.sqlalchemy_session = session
-                factories.ProviderForRouterFactory._meta.sqlalchemy_session = session
-                factories.OrganizationFactory._meta.sqlalchemy_session = session
-                factories.LimitFactory._meta.sqlalchemy_session = session
+                for factory in all_sql_factories:
+                    factory._meta.sqlalchemy_session = session
                 yield session
+                await session.rollback()
         finally:
             await session.rollback()
             await session.close()
@@ -73,7 +68,14 @@ async def client(db_session) -> AsyncGenerator[AsyncClient, None]:
 
     async def override_get_postgres_session():
         """Override the database session dependency."""
-        yield db_session
+        try:
+            yield db_session
+            if db_session.in_transaction():
+                await db_session.flush()
+        except Exception:
+            if db_session.in_transaction():
+                await db_session.rollback()
+            raise
 
     app.dependency_overrides[get_postgres_session] = override_get_postgres_session
 
