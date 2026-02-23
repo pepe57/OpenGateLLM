@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
-from api.domain.router.entities import ModelType, Router, RouterLoadBalancingStrategy
+from api.domain.model import ModelType as RouterType
+from api.domain.router.entities import Router, RouterLoadBalancingStrategy
 from api.domain.router.errors import RouterAliasAlreadyExistsError, RouterNameAlreadyExistsError
 
 
@@ -14,10 +15,18 @@ class RouterRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_router_by_id(self, router_id: int) -> Router | None:
+        pass
+
+    @abstractmethod
+    async def get_aliases_by_router_id(self, router_id: int) -> Router | None:
+        pass
+
+    @abstractmethod
     async def create_router(
         self,
         name: str,
-        router_type: ModelType,
+        router_type: RouterType,
         load_balancing_strategy: RouterLoadBalancingStrategy,
         cost_prompt_tokens: float,
         cost_completion_tokens: float,
