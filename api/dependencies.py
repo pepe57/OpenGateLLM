@@ -8,8 +8,8 @@ from api.domain.key import KeyRepository
 from api.infrastructure.model import ModelProviderGateway
 from api.infrastructure.postgres import PostgresKeyRepository, PostgresProviderRepository, PostgresRouterRepository, PostgresUserInfoRepository
 from api.schemas.core.context import RequestContext
-from api.use_cases.admin import CreateRouterUseCase
 from api.use_cases.admin.providers import CreateProviderUseCase
+from api.use_cases.admin.routers import CreateRouterUseCase, GetOneRouterUseCase, GetRoutersUseCase
 from api.use_cases.models import GetModelsUseCase
 from api.utils.configuration import configuration
 from api.utils.context import global_context, request_context
@@ -54,7 +54,25 @@ def create_provider_use_case_factory(
     )
 
 
-def create_router_use_case(postgres_session: AsyncSession = Depends(get_postgres_session)) -> CreateRouterUseCase:
+def get_one_router_use_case_factory(
+    postgres_session: AsyncSession = Depends(get_postgres_session),
+) -> GetOneRouterUseCase:
+    return GetOneRouterUseCase(
+        router_repository=PostgresRouterRepository(postgres_session=postgres_session, app_title=configuration.settings.app_title),
+        user_info_repository=PostgresUserInfoRepository(postgres_session=postgres_session),
+    )
+
+
+def get_routers_use_case_factory(
+    postgres_session: AsyncSession = Depends(get_postgres_session),
+) -> GetRoutersUseCase:
+    return GetRoutersUseCase(
+        router_repository=PostgresRouterRepository(postgres_session=postgres_session, app_title=configuration.settings.app_title),
+        user_info_repository=PostgresUserInfoRepository(postgres_session=postgres_session),
+    )
+
+
+def create_router_use_case_factory(postgres_session: AsyncSession = Depends(get_postgres_session)) -> CreateRouterUseCase:
     return CreateRouterUseCase(
         router_repository=PostgresRouterRepository(postgres_session=postgres_session, app_title=configuration.settings.app_title),
         user_info_repository=PostgresUserInfoRepository(postgres_session=postgres_session),

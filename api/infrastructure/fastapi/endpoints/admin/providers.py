@@ -1,3 +1,4 @@
+from contextvars import ContextVar
 import logging
 from typing import Literal
 
@@ -10,7 +11,7 @@ from api.domain.model import InconsistentModelMaxContextLengthError, Inconsisten
 from api.domain.provider import InvalidProviderTypeError, ProviderNotReachableError
 from api.domain.provider.errors import ProviderAlreadyExistsError
 from api.domain.router.errors import RouterNotFoundError
-from api.domain.userinfo.errors import InsufficientPermissionError
+from api.domain.userinfo.errors import UserIsNotAdminError
 from api.helpers.models import ModelRegistry
 from api.infrastructure.fastapi.access import get_current_key
 from api.infrastructure.fastapi.context import RequestContext
@@ -19,9 +20,9 @@ from api.infrastructure.fastapi.endpoints.admin import router
 from api.infrastructure.fastapi.endpoints.exceptions import (
     InconsistentModelMaxContextLengthHTTPException,
     InconsistentModelVectorSizeHTTPException,
-    InsufficientPermissionHTTPException,
     InternalServerHTTPException,
     InvalidProviderTypeHTTPException,
+    NotAdminUserHTTPException,
     ProviderAlreadyExistsHTTPException,
     ProviderNotReachableHTTPException,
     RouterNotFoundHTTPException,
@@ -38,21 +39,23 @@ logger = logging.getLogger(__name__)
     path=EndpointRoute.ADMIN_PROVIDERS,
     dependencies=[Security(dependency=get_current_key)],
     status_code=201,
-    responses=get_documentation_responses([
-        InconsistentModelMaxContextLengthHTTPException,
-        InconsistentModelVectorSizeHTTPException,
-        InvalidProviderTypeHTTPException,
-        ProviderNotReachableHTTPException,
-        ProviderAlreadyExistsHTTPException,
-        RouterNotFoundHTTPException,
-        InsufficientPermissionHTTPException,
-    ]),
+    responses=get_documentation_responses(
+        [
+            InconsistentModelMaxContextLengthHTTPException,
+            InconsistentModelVectorSizeHTTPException,
+            InvalidProviderTypeHTTPException,
+            ProviderNotReachableHTTPException,
+            ProviderAlreadyExistsHTTPException,
+            RouterNotFoundHTTPException,
+            NotAdminUserHTTPException,
+        ]
+    ),
 )
 async def create_provider(
     request: Request,
     body: CreateProvider,
     create_provider_use_case: CreateProviderUseCase = Depends(create_provider_use_case_factory),
-    request_context: RequestContext = Depends(get_request_context),
+    request_context: ContextVar[RequestContext] = Depends(get_request_context),
 ) -> CreateProviderResponse:
     try:
         command = CreateProviderCommand(
@@ -99,8 +102,8 @@ async def create_provider(
             raise ProviderAlreadyExistsHTTPException(model_name=model_name, url=url, router_id=router_id)
         case RouterNotFoundError(router_id=router_id):
             raise RouterNotFoundHTTPException(router_id=router_id)
-        case InsufficientPermissionError():
-            raise InsufficientPermissionHTTPException()
+        case UserIsNotAdminError():
+            raise NotAdminUserHTTPException()
 
 
 @router.delete(

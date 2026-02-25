@@ -1,8 +1,10 @@
+from datetime import datetime, timedelta
+
 import pytest
 
 from api.domain.key.entities import MASTER_USER_ID
 from api.domain.model import ModelType as RouterType
-from api.domain.router.entities import Router, RouterLoadBalancingStrategy
+from api.domain.router.entities import Router, RouterLoadBalancingStrategy, RouterSortField, SortOrder
 from api.domain.router.errors import RouterAliasAlreadyExistsError, RouterNameAlreadyExistsError
 from api.infrastructure.postgres import PostgresRouterRepository
 from api.tests.integration.factories import OrganizationSQLFactory, RouterSQLFactory, UserSQLFactory
@@ -26,7 +28,13 @@ class TestGetAllRouters:
         user_2 = UserSQLFactory()
 
         router_1 = RouterSQLFactory(
-            user=user_1, name="router_1", type=RouterType.TEXT_GENERATION, cost_prompt_tokens=0.001, cost_completion_tokens=0.002, providers=2
+            user=user_1,
+            name="router_1",
+            type=RouterType.TEXT_GENERATION,
+            cost_prompt_tokens=0.001,
+            cost_completion_tokens=0.002,
+            providers=2,
+            alias=["alias1", "alias2"],
         )
         router_2 = RouterSQLFactory(
             user=user_1, name="router_2", type=RouterType.TEXT_EMBEDDINGS_INFERENCE, cost_prompt_tokens=0.0, cost_completion_tokens=0.0, providers=1
@@ -45,12 +53,14 @@ class TestGetAllRouters:
         assert router_names == {router_1.name, router_2.name, router_3.name}
 
         result_router_1 = result_routers[0]
+        first_provider_router_1 = router_1.provider[0]
         assert result_router_1.type == RouterType.TEXT_GENERATION
         assert result_router_1.providers == 2
         assert result_router_1.cost_prompt_tokens == 0.001
         assert result_router_1.cost_completion_tokens == 0.002
-        assert result_router_1.max_context_length == router_1.provider[0].max_context_length
-        assert result_router_1.vector_size == router_1.provider[0].vector_size
+        assert result_router_1.max_context_length == first_provider_router_1.max_context_length
+        assert result_router_1.vector_size == first_provider_router_1.vector_size
+        assert result_router_1.aliases == ["alias1", "alias2"]
 
     async def test_get_all_routers_should_return_routers_with_master_id_user(self, repository, db_session):
         # Arrange
@@ -89,7 +99,7 @@ class TestGetAllAliases:
 
         # Act
         await db_session.flush()
-        aliases = await repository.get_all_aliases_grouped_by_router()
+        aliases = await repository.get_aliases_grouped_by_router()
         # Assert
         assert aliases == {
             router_1.id: ["alias1_m1", "alias2_m1"],
@@ -262,6 +272,118 @@ class TestGetOrganizationName:
         actual_organization_name = await repository.get_organization_name(user_id=user_without_organiztion.id)
         # Assert
         assert actual_organization_name == app_title
+
+
+@pytest.mark.asyncio(loop_scope="session")
+class TestGetRoutersPage:
+    async def test_returns_correct_page_with_limit_and_offset(self, repository, db_session):
+        # Arrange
+        user = UserSQLFactory()
+        RouterSQLFactory(user=user, name="router_a")
+        RouterSQLFactory(user=user, name="router_b")
+        RouterSQLFactory(user=user, name="router_c")
+        await db_session.flush()
+
+        # Act
+        result = await repository.get_routers_page(limit=2, offset=0, sort_by=RouterSortField.NAME, sort_order=SortOrder.ASC)
+
+        # Assert
+        assert result.total == 3
+        assert len(result.data) == 2
+        assert result.data[0].name == "router_a"
+        assert result.data[1].name == "router_b"
+
+    async def test_total_is_consistent_across_pages(self, repository, db_session):
+        # Arrange
+        user = UserSQLFactory()
+        RouterSQLFactory(user=user, name="router_a")
+        RouterSQLFactory(user=user, name="router_b")
+        RouterSQLFactory(user=user, name="router_c")
+        RouterSQLFactory(user=user, name="router_d")
+        RouterSQLFactory(user=user, name="router_e")
+        RouterSQLFactory(user=user, name="router_f")
+        await db_session.flush()
+
+        # Act
+        first_page = await repository.get_routers_page(limit=4, offset=0)
+        second_page = await repository.get_routers_page(limit=4, offset=4)
+
+        # Assert
+        assert first_page.total == second_page.total
+        assert len(second_page.data) == 2
+
+    async def test_sort_by_name_asc(self, repository, db_session):
+        # Arrange
+        user = UserSQLFactory()
+        RouterSQLFactory(user=user, name="router_c")
+        RouterSQLFactory(user=user, name="router_a")
+        RouterSQLFactory(user=user, name="router_b")
+        await db_session.flush()
+
+        # Act
+        result = await repository.get_routers_page(limit=10, offset=0, sort_by=RouterSortField.NAME, sort_order=SortOrder.ASC)
+
+        # Assert
+        returned_names = [r.name for r in result.data]
+        assert returned_names == ["router_a", "router_b", "router_c"]
+
+    async def test_sort_by_name_desc(self, repository, db_session):
+        # Arrange
+        user = UserSQLFactory()
+        RouterSQLFactory(user=user, name="router_c")
+        RouterSQLFactory(user=user, name="router_a")
+        RouterSQLFactory(user=user, name="router_b")
+        await db_session.flush()
+
+        # Act
+        result = await repository.get_routers_page(limit=10, offset=0, sort_by=RouterSortField.NAME, sort_order=SortOrder.DESC)
+
+        # Assert
+        returned_names = [r.name for r in result.data]
+
+        assert returned_names == ["router_c", "router_b", "router_a"]
+
+    async def test_returns_empty_page_when_offset_exceeds_total(self, repository, db_session):
+        # Arrange
+        user = UserSQLFactory()
+        RouterSQLFactory(user=user, name="router_a")
+        await db_session.flush()
+
+        # Act
+        result = await repository.get_routers_page(limit=10, offset=100)
+
+        # Assert
+        assert result.data == []
+
+    async def test_sort_by_id_asc(self, repository, db_session):
+        # Arrange
+        user = UserSQLFactory()
+        RouterSQLFactory(id=1235, user=user, name="router_a")
+        RouterSQLFactory(id=1233, user=user, name="router_b")
+        RouterSQLFactory(id=1234, user=user, name="router_c")
+        await db_session.flush()
+
+        # Act
+        result = await repository.get_routers_page(limit=10, offset=0, sort_by=RouterSortField.ID, sort_order=SortOrder.ASC)
+
+        # Assert
+        returned_ids = [r.id for r in result.data]
+        assert returned_ids == [1233, 1234, 1235]
+
+    async def test_sort_by_created_date_desc(self, repository, db_session):
+        # Arrange
+        user = UserSQLFactory()
+        RouterSQLFactory(id=1233, user=user, name="oldest", created=datetime.now() - timedelta(days=10))
+        RouterSQLFactory(id=1235, user=user, name="newest", created=datetime.now())
+        RouterSQLFactory(id=1234, user=user, name="middle", created=datetime.now() - timedelta(hours=1))
+        await db_session.flush()
+
+        # Act
+        result = await repository.get_routers_page(limit=10, offset=0, sort_by=RouterSortField.CREATED, sort_order=SortOrder.DESC)
+
+        # Assert
+        returned_names = [r.name for r in result.data]
+        assert returned_names == ["newest", "middle", "oldest"]
 
 
 if __name__ == "__main__":
