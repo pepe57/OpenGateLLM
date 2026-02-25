@@ -1,5 +1,4 @@
 import logging
-import time
 from time import sleep
 from uuid import uuid4
 
@@ -34,8 +33,6 @@ def document_id(client: TestClient, collection_id: int):
     assert response.status_code == 201, response.text
     document_id = response.json()["id"]
 
-    time.sleep(2)
-
     yield document_id
 
     # delete the document
@@ -55,7 +52,7 @@ def chunks_ids(client: TestClient, document_id: int):
     response = client.post_without_permissions(url=f"/v1{EndpointRoute.DOCUMENTS}/{document_id}/chunks", json=data)
     assert response.status_code == 201, response.text
     chunk_ids = response.json()["ids"]
-    sleep(1)
+    sleep(2)
 
     yield chunk_ids
 
@@ -71,7 +68,7 @@ class TestSearch:
         if chunks:
             response = client.post_without_permissions(url=f"/v1{EndpointRoute.DOCUMENTS}/{document_id}/chunks", json={"chunks": chunks})
             assert response.status_code == 201, response.text
-            sleep(1)
+            sleep(2)
 
         return document_id
 
@@ -106,6 +103,16 @@ class TestSearch:
         assert len(searches.data) == 1  # only one chunk left
         assert searches.data[0].chunk.id == second_chunk_id
         assert first_chunk_id not in [search.chunk.id for search in searches.data]
+
+    def test_search_with_legacy_query_argument(self, client: TestClient):
+        """Test POST /search with a legacy query argument."""
+
+        data = {"prompt": "Voltaire", "limit": 1}
+        response = client.post_without_permissions(url=f"/v1{EndpointRoute.SEARCH}", json=data)
+        assert response.status_code == 200, response.text
+        searches = Searches(**response.json())
+        assert len(searches.data) == 1
+        assert searches.data[0].chunk.content == "Qui est Voltaire ?"
 
     def test_search_with_score_threshold(self, client: TestClient):
         """Test POST /search with a score threshold."""
