@@ -71,7 +71,7 @@ def custom_validation_error(url: str | None = None):
             for error in error_content:
                 loc = tuple(error.get("loc", ()))
                 documentation_url = resolve_model_for_error(cls, loc)
-                original_line = f"    For further information visit {error["url"]}"
+                original_line = f"    For further information visit {error['url']}"
                 replacement_line = f"    For further information visit {documentation_url}"
                 message = message.replace(original_line, replacement_line, 1)
 
@@ -302,7 +302,7 @@ class Dependencies(ConfigBaseModel):
 
             # Ensure only one dependency of this family is defined
             if len(candidates) > 1:
-                raise ValueError(f"Only one {type.__name__} is allowed (provided: {", ".join(c.value for c in candidates)}).")
+                raise ValueError(f"Only one {type.__name__} is allowed (provided: {', '.join(c.value for c in candidates)}).")
 
             # If no dependency is provided, set the attribute to None
             if len(candidates) == 0:
@@ -406,17 +406,7 @@ class Settings(ConfigBaseModel):
     @model_validator(mode="after")
     def validate_model(self) -> Any:
         if self.session_secret_key is None:
-            logging.warning("Session secret key not provided, using master key.")  # fmt: off
             self.session_secret_key = self.auth_master_key
-
-        if len(self.auth_master_key) < 32:
-            logging.warning("Auth master key is too short for production, it should be at least 32 characters.")  # fmt: off
-
-        if any(router in self.hidden_routers for router in [RouterName.ADMIN, RouterName.AUTH]):
-            logging.warning("Admin router should be hidden in production.")  # fmt: off
-
-        if RouterName.AUTH not in self.hidden_routers:
-            logging.warning("Auth router should be hidden in production.")  # fmt: off
 
         return self
 
@@ -473,6 +463,7 @@ class Configuration(BaseSettings):
 
     # config
     config_file: str = "config.yml"
+    prometheus_multiproc_dir: str = "/tmp/prometheus_multiproc"
 
     @field_validator("config_file", mode="before")
     def config_file_exists(cls, config_file):
