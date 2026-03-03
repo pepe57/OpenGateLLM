@@ -1,4 +1,4 @@
-from sqlalchemy import Integer, Select, asc, cast, delete, desc, func, insert, select
+from sqlalchemy import Integer, Select, asc, cast, delete, desc, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -203,3 +203,61 @@ class PostgresRouterRepository(RouterRepository):
             return None
         await self.postgres_session.execute(delete(RouterTable).where(RouterTable.id == router_id))
         return router
+
+    async def update_router(self, router_to_update: Router) -> Router | RouterNameAlreadyExistsError:
+        db_user_id = None if router_to_update.user_id == MASTER_USER_ID else router_to_update.user_id
+
+        try:
+            update_query = (
+                update(RouterTable)
+                .where(RouterTable.id == router_to_update.id)
+                .values(
+                    user_id=db_user_id,
+                    name=router_to_update.name,
+                    type=router_to_update.type.value,
+                    load_balancing_strategy=router_to_update.load_balancing_strategy.value,
+                    cost_prompt_tokens=router_to_update.cost_prompt_tokens,
+                    cost_completion_tokens=router_to_update.cost_completion_tokens,
+                )
+                .returning(
+                    RouterTable.id,
+                    RouterTable.name,
+                    RouterTable.user_id,
+                    RouterTable.type,
+                    RouterTable.load_balancing_strategy,
+                    RouterTable.cost_prompt_tokens,
+                    RouterTable.cost_completion_tokens,
+                    cast(func.extract("epoch", RouterTable.created), Integer).label("created"),
+                    cast(func.extract("epoch", RouterTable.updated), Integer).label("updated"),
+                )
+            )
+            result = await self.postgres_session.execute(update_query)
+            row = result.one()
+
+            if router_to_update.aliases is not None:
+                await self.postgres_session.execute(delete(RouterAliasTable).where(RouterAliasTable.router_id == router_to_update.id))
+                if router_to_update.aliases:
+                    await self.postgres_session.execute(
+                        insert(RouterAliasTable),
+                        [{"value": alias, "router_id": router_to_update.id} for alias in router_to_update.aliases],
+                    )
+        except IntegrityError as e:
+            if "router_name_key" in str(e.orig):
+                return RouterNameAlreadyExistsError(name=router_to_update.name)
+            raise
+
+        return Router(
+            id=row.id,
+            name=row.name,
+            user_id=router_to_update.user_id,
+            type=RouterType(row.type),
+            aliases=router_to_update.aliases,
+            load_balancing_strategy=RouterLoadBalancingStrategy(row.load_balancing_strategy),
+            vector_size=router_to_update.vector_size,
+            max_context_length=router_to_update.max_context_length,
+            cost_prompt_tokens=row.cost_prompt_tokens or 0.0,
+            cost_completion_tokens=row.cost_completion_tokens or 0.0,
+            providers=router_to_update.providers,
+            created=row.created,
+            updated=row.updated,
+        )
